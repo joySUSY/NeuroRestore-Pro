@@ -1,0 +1,5 @@
+{
+  "name": "NeuroRestore Pro",
+  "description": "An intelligent, high-fidelity image restoration and upscaling engine specifically designed for scanned documents, digital art, and illustrations. Features aggressive re-rendering, sub-pixel typography reconstruction, and semantic text correction.",
+  "requestFramePermissions": []
+}
