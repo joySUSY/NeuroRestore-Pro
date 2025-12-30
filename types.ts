@@ -1,8 +1,10 @@
+
 export enum AppMode {
   RESTORATION = 'RESTORATION',
   GENERATION = 'GENERATION',
   INPAINTING = 'INPAINTING',
-  VECTORIZATION = 'VECTORIZATION', // New Mode
+  VECTORIZATION = 'VECTORIZATION',
+  EXTRACT_TEXT = 'EXTRACT_TEXT', // New Mode
   ANALYSIS = 'ANALYSIS'
 }
 
@@ -67,7 +69,7 @@ export interface AnalysisResult {
 
 export interface ProcessingState {
   isProcessing: boolean;
-  stage: 'idle' | 'analyzing' | 'restoring' | 'generating' | 'inpainting' | 'vectorizing' | 'complete' | 'error';
+  stage: 'idle' | 'analyzing' | 'restoring' | 'generating' | 'inpainting' | 'vectorizing' | 'extracting_text' | 'complete' | 'error';
   error: string | null;
   progressMessage: string;
 }

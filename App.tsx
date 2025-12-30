@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ComparisonSlider from './components/ComparisonSlider';
 import CanvasEditor, { CanvasEditorRef } from './components/CanvasEditor';
-import { analyzeImageIssues, restoreOrEditImage, generateNewImage, inpaintImage, fileToGenerativePart, vectorizeImage } from './services/geminiService';
+import LayerPanel from './components/LayerPanel';
+import { analyzeImageIssues, restoreOrEditImage, generateNewImage, inpaintImage, fileToGenerativePart, vectorizeImage, extractText } from './services/geminiService';
 import { AppMode, RestorationConfig, ImageType, Resolution, AspectRatio, ProcessingState, AnalysisResult, ColorStyle } from './types';
 
 const App: React.FC = () => {
@@ -13,6 +14,9 @@ const App: React.FC = () => {
   // App State
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
+  // Display Image is the one actually shown (can be modified by LayerPanel, unlike processedImage which is source of truth)
+  const [displayImage, setDisplayImage] = useState<string | null>(null);
+  
   const [mimeType, setMimeType] = useState<string>('image/jpeg');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [mode, setMode] = useState<AppMode>(AppMode.RESTORATION);
@@ -94,9 +98,10 @@ const App: React.FC = () => {
 
     setProcessing({ isProcessing: true, stage: 'analyzing', error: null, progressMessage: 'Uploading...' });
     setProcessedImage(null);
+    setDisplayImage(null);
     setAnalysis(null);
     // Reset mode to RESTORATION unless we are already in Vectorization
-    if (mode !== AppMode.VECTORIZATION) {
+    if (mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT) {
         setMode(AppMode.RESTORATION); 
     }
 
@@ -132,6 +137,7 @@ const App: React.FC = () => {
     if (mode === AppMode.GENERATION) stageStr = 'generating';
     if (mode === AppMode.INPAINTING) stageStr = 'inpainting';
     if (mode === AppMode.VECTORIZATION) stageStr = 'vectorizing';
+    if (mode === AppMode.EXTRACT_TEXT) stageStr = 'extracting_text';
 
     setProcessing({ isProcessing: true, stage: stageStr, error: null, progressMessage: 'Initiating neural engine...' });
 
@@ -155,8 +161,14 @@ const App: React.FC = () => {
       else if (mode === AppMode.VECTORIZATION) {
           if (!originalImage) throw new Error("Please upload an image first.");
           const base64 = originalImage.split(',')[1];
-          setProcessing(prev => ({ ...prev, progressMessage: 'Tracing topology & paths...' }));
+          setProcessing(prev => ({ ...prev, progressMessage: 'Tracing topology & separating layers...' }));
           resultUrl = await vectorizeImage(base64, mimeType, config);
+      }
+      else if (mode === AppMode.EXTRACT_TEXT) {
+          if (!originalImage) throw new Error("Please upload an image first.");
+          const base64 = originalImage.split(',')[1];
+          setProcessing(prev => ({ ...prev, progressMessage: 'Isolating textual semantics & removing background...' }));
+          resultUrl = await extractText(base64, mimeType);
       }
       else {
         if (!config.customPrompt) throw new Error("Please provide a prompt for generation.");
@@ -165,6 +177,7 @@ const App: React.FC = () => {
       }
 
       setProcessedImage(resultUrl);
+      setDisplayImage(resultUrl); // Initialize display image with result
       
       // If Inpainting, update the canvas source to the new result so user can continue editing
       if (mode === AppMode.INPAINTING) {
@@ -180,10 +193,12 @@ const App: React.FC = () => {
   };
 
   const handleDownload = () => {
-      if (processedImage) {
+      // If LayerPanel is active, it handles its own download. 
+      // This is a fallback or for non-vector modes.
+      if (displayImage) {
           const link = document.createElement('a');
-          link.href = processedImage;
-          const ext = mode === AppMode.VECTORIZATION ? 'svg' : 'png';
+          link.href = displayImage;
+          const ext = (mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) ? 'svg' : 'png';
           link.download = `neuro_output_${Date.now()}.${ext}`;
           document.body.appendChild(link);
           link.click();
@@ -249,7 +264,7 @@ const App: React.FC = () => {
         isProcessing={processing.isProcessing}
         mode={mode}
         setMode={setMode}
-        disabled={(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION) && !originalImage}
+        disabled={(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && !originalImage}
         onExpand={(dir) => canvasRef.current?.expandCanvas(dir, 25)}
         onClearMask={() => canvasRef.current?.clearMask()}
       />
@@ -260,14 +275,14 @@ const App: React.FC = () => {
         {/* Header/Toolbar */}
         <div className="h-16 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between px-6 backdrop-blur-sm z-20">
             <div className="flex items-center gap-4">
-                {(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION) && (
+                {(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
                      <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded text-sm font-medium transition-colors border border-gray-700">
                      <span>{originalImage ? 'Replace Image' : 'Upload Image'}</span>
                      <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                    </label>
                 )}
                
-               {analysis && (mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && (
+               {analysis && (mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
                    <div className="flex flex-wrap gap-2 items-center">
                        {analysis.description && (
                            <div className="text-xs text-gray-300 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700 flex items-center gap-2">
@@ -298,16 +313,25 @@ const App: React.FC = () => {
                          {processing.progressMessage}
                      </div>
                  )}
-                 {processedImage && mode !== AppMode.INPAINTING && (
+                 {displayImage && mode !== AppMode.INPAINTING && mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT && (
+                    <button 
+                        onClick={handleDownload}
+                        className="px-4 py-2 rounded text-sm font-medium transition-colors border bg-gray-800 hover:bg-cyan-900 text-cyan-400 hover:text-cyan-200 border-cyan-900"
+                    >
+                        Download Result
+                    </button>
+                 )}
+                 {/* Vector & Extract Text modes have LayerPanel for download, but we keep this as a quick main download */}
+                 {(mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && displayImage && (
                     <button 
                         onClick={handleDownload}
                         className={`px-4 py-2 rounded text-sm font-medium transition-colors border ${
-                            mode === AppMode.VECTORIZATION 
-                            ? 'bg-purple-900/50 border-purple-500 text-purple-200 hover:bg-purple-800' 
-                            : 'bg-gray-800 hover:bg-cyan-900 text-cyan-400 hover:text-cyan-200 border-cyan-900'
+                           mode === AppMode.EXTRACT_TEXT
+                           ? 'bg-green-900/50 border-green-500 text-green-200 hover:bg-green-800'
+                           : 'bg-purple-900/50 border-purple-500 text-purple-200 hover:bg-purple-800'
                         }`}
                     >
-                        {mode === AppMode.VECTORIZATION ? 'Download SVG' : 'Download Result'}
+                        Download SVG
                     </button>
                  )}
                  {mode === AppMode.INPAINTING && originalImage && (
@@ -332,7 +356,7 @@ const App: React.FC = () => {
         <div className="flex-1 relative bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] bg-gray-900 p-8 flex items-center justify-center overflow-hidden">
             
             {/* Empty State */}
-            {!originalImage && (mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION) && (
+            {!originalImage && (mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
                 <div className="text-center p-12 border-2 border-dashed border-gray-800 rounded-xl max-w-lg">
                     <div className="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6">
                         <svg className="w-10 h-10 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -375,16 +399,16 @@ const App: React.FC = () => {
             )}
 
             {/* Content Display */}
-            <div className="w-full h-full max-w-6xl flex items-center justify-center">
+            <div className="w-full h-full max-w-6xl flex items-center justify-center relative">
                 
-                {/* RESTORATION & VECTORIZATION MODE: Comparison Slider */}
-                {/* Note: We reuse Comparison Slider for Vectorization because the SVG is converted to Base64 Image! */}
-                {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && originalImage && (
+                {/* RESTORATION, VECTORIZATION & EXTRACT MODE: Comparison Slider */}
+                {/* Note: We reuse Comparison Slider for Vectorization/Extract because the SVG is converted to Base64 Image! */}
+                {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && originalImage && (
                     <>
-                        {processedImage ? (
+                        {displayImage ? (
                             <ComparisonSlider 
                                 originalImage={originalImage} 
-                                restoredImage={processedImage} 
+                                restoredImage={displayImage} 
                                 className="shadow-2xl shadow-black"
                             />
                         ) : (
@@ -396,7 +420,7 @@ const App: React.FC = () => {
                                 />
                                 {analysis && !processing.isProcessing && (
                                     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur px-4 py-2 rounded-full text-sm text-gray-300 border border-gray-700">
-                                        Analysis Complete. Ready to {mode === AppMode.VECTORIZATION ? 'Vectorize' : 'Re-Render'}.
+                                        Analysis Complete. Ready to {mode === AppMode.VECTORIZATION ? 'Vectorize' : mode === AppMode.EXTRACT_TEXT ? 'Isolate Text' : 'Re-Render'}.
                                     </div>
                                 )}
                             </div>
@@ -416,12 +440,22 @@ const App: React.FC = () => {
                 )}
 
                 {/* GENERATION MODE: Simple Image */}
-                {mode === AppMode.GENERATION && processedImage && (
+                {mode === AppMode.GENERATION && displayImage && (
                     <img 
-                        src={processedImage} 
+                        src={displayImage} 
                         alt="Generated" 
                         className="max-w-full max-h-full object-contain rounded-lg shadow-2xl shadow-cyan-900/20" 
                     />
+                )}
+
+                {/* Floating Layer Panel (For Vector & Extract Modes with Result) */}
+                {(mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && processedImage && (
+                    <div className="absolute top-4 right-4 z-20 animate-in fade-in slide-in-from-right-4">
+                        <LayerPanel 
+                            svgDataUrl={processedImage} 
+                            onUpdateView={setDisplayImage} 
+                        />
+                    </div>
                 )}
             </div>
 

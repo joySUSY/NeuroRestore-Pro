@@ -67,16 +67,22 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 Inpaint
             </button>
             <button 
-                onClick={() => setMode(AppMode.GENERATION)}
-                className={`py-2 rounded-md transition-colors ${mode === AppMode.GENERATION ? 'bg-gray-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
-            >
-                Create
-            </button>
-            <button 
                 onClick={() => setMode(AppMode.VECTORIZATION)}
                 className={`py-2 rounded-md transition-colors ${mode === AppMode.VECTORIZATION ? 'bg-purple-900/50 text-purple-200 border border-purple-500/30 shadow' : 'text-gray-500 hover:text-gray-300'}`}
             >
                 Vectorize
+            </button>
+             <button 
+                onClick={() => setMode(AppMode.EXTRACT_TEXT)}
+                className={`py-2 rounded-md transition-colors ${mode === AppMode.EXTRACT_TEXT ? 'bg-green-900/50 text-green-200 border border-green-500/30 shadow' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+                Extract Text
+            </button>
+             <button 
+                onClick={() => setMode(AppMode.GENERATION)}
+                className={`col-span-2 py-2 rounded-md transition-colors ${mode === AppMode.GENERATION ? 'bg-gray-700 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}
+            >
+                Create New
             </button>
         </div>
 
@@ -143,7 +149,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         )}
 
         {/* --- VECTORIZATION SPECIFIC CONTROLS --- */}
-        {mode === AppMode.VECTORIZATION && (
+        {(mode === AppMode.VECTORIZATION) && (
             <div className="p-4 bg-purple-900/20 rounded-lg border border-purple-500/20 space-y-4">
                  <h3 className="text-xs font-bold text-purple-400 uppercase tracking-wider">Vector Settings</h3>
                  
@@ -187,6 +193,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                      Best for Logos, Icons, and simple Illustrations. Generates SVG code.
                  </p>
             </div>
+        )}
+
+        {/* --- EXTRACT TEXT INFO --- */}
+        {mode === AppMode.EXTRACT_TEXT && (
+             <div className="p-4 bg-green-900/20 rounded-lg border border-green-500/20 space-y-4">
+                 <h3 className="text-xs font-bold text-green-400 uppercase tracking-wider">Extraction Engine</h3>
+                 <p className="text-[10px] text-green-300/80 leading-tight">
+                     Removes background and extracts only textual elements as a transparent SVG. Ideal for overlaying translated text or grabbing logo types.
+                 </p>
+             </div>
         )}
 
         {/* Content Type (Only Restore) */}
@@ -276,8 +292,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
            </div>
         )}
 
-        {/* Output Resolution - Hide for Vector mode */}
-        {mode !== AppMode.VECTORIZATION && (
+        {/* Output Resolution - Hide for Vector/Extract modes */}
+        {mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT && (
             <div>
             <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">Target Resolution</label>
             <select 
@@ -293,27 +309,29 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         )}
 
         {/* Aspect Ratio */}
-        <div>
-          <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">Aspect Ratio</label>
-          <select 
-            value={config.aspectRatio}
-            onChange={(e) => handleChange('aspectRatio', e.target.value)}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
-          >
-            <option value={AspectRatio.ORIGINAL}>Original (Match Source)</option>
-            {Object.values(AspectRatio)
-              .filter(r => r !== AspectRatio.ORIGINAL)
-              .map(ratio => (
-              <option key={ratio} value={ratio}>{ratio}</option>
-            ))}
-          </select>
-          {mode === AppMode.INPAINTING && (
-              <p className="text-[10px] text-gray-500 mt-1">Aspect ratio determined by Canvas.</p>
-          )}
-        </div>
+        {mode !== AppMode.EXTRACT_TEXT && (
+            <div>
+            <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">Aspect Ratio</label>
+            <select 
+                value={config.aspectRatio}
+                onChange={(e) => handleChange('aspectRatio', e.target.value)}
+                className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
+            >
+                <option value={AspectRatio.ORIGINAL}>Original (Match Source)</option>
+                {Object.values(AspectRatio)
+                .filter(r => r !== AspectRatio.ORIGINAL)
+                .map(ratio => (
+                <option key={ratio} value={ratio}>{ratio}</option>
+                ))}
+            </select>
+            {mode === AppMode.INPAINTING && (
+                <p className="text-[10px] text-gray-500 mt-1">Aspect ratio determined by Canvas.</p>
+            )}
+            </div>
+        )}
 
         {/* Text Prompt */}
-        {mode !== AppMode.VECTORIZATION && (
+        {mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT && (
             <div>
             <label className="block text-xs font-mono text-gray-400 mb-2 uppercase tracking-wider">
                 {mode === AppMode.RESTORATION ? 'Edit / Instructions' : (mode === AppMode.INPAINTING ? 'Edit Instruction' : 'Creation Prompt')}
@@ -340,13 +358,16 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
               ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
               : mode === AppMode.VECTORIZATION 
                 ? 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white shadow-purple-900/50'
-                : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-900/50'
+                : mode === AppMode.EXTRACT_TEXT
+                    ? 'bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-500 hover:to-teal-500 text-white shadow-green-900/50'
+                    : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-900/50'
             }`}
         >
           {isProcessing ? 'Processing...' : (
               mode === AppMode.RESTORATION ? 'Enhance & Restore' : 
               mode === AppMode.INPAINTING ? 'Execute Edit' : 
-              mode === AppMode.VECTORIZATION ? 'Convert to SVG' : 'Generate'
+              mode === AppMode.VECTORIZATION ? 'Convert to SVG' : 
+              mode === AppMode.EXTRACT_TEXT ? 'Isolate Text' : 'Generate'
           )}
         </button>
       </div>
