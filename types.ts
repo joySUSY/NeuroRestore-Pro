@@ -48,6 +48,7 @@ export interface RestorationConfig {
   aspectRatio: AspectRatio; // Only for generation or creative editing
   colorStyle: ColorStyle; // New field
   referenceImage?: string; // Data URL for Style Reference
+  detailEnhancement: 'OFF' | 'BALANCED' | 'MAX'; // New field for intelligent detail enhancement
   // Inpainting specific
   brushSize: number;
   maskBlendMode: MaskBlendMode;
@@ -65,6 +66,7 @@ export interface AnalysisResult {
   detectedMaterial?: string; // New field for physical substrate detection (e.g., "Wove Paper", "Holographic")
   requiresDescreening?: boolean; // Critical for scan restoration
   description?: string; // Brief technical description
+  dominantColors?: string[]; // Array of Hex Codes for quantization
 }
 
 export interface ProcessingState {

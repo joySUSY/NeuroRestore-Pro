@@ -3,7 +3,9 @@ import ControlPanel from './components/ControlPanel';
 import ComparisonSlider from './components/ComparisonSlider';
 import CanvasEditor, { CanvasEditorRef } from './components/CanvasEditor';
 import LayerPanel from './components/LayerPanel';
+import ProcessingOverlay from './components/ProcessingOverlay';
 import { analyzeImageIssues, restoreOrEditImage, generateNewImage, inpaintImage, fileToGenerativePart, vectorizeImage, extractText } from './services/geminiService';
+import { processDocumentWithSwarm } from './services/swarmService';
 import { AppMode, RestorationConfig, ImageType, Resolution, AspectRatio, ProcessingState, AnalysisResult, ColorStyle } from './types';
 
 const App: React.FC = () => {
@@ -14,22 +16,31 @@ const App: React.FC = () => {
   // App State
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
-  // Display Image is the one actually shown (can be modified by LayerPanel, unlike processedImage which is source of truth)
   const [displayImage, setDisplayImage] = useState<string | null>(null);
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
   
+  // Image Meta
   const [mimeType, setMimeType] = useState<string>('image/jpeg');
+  const [imgDims, setImgDims] = useState({ width: 0, height: 0 });
+
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [mode, setMode] = useState<AppMode>(AppMode.RESTORATION);
   
-  // Ref for Canvas Editor
+  // Swarm Toggle State
+  const [useSwarm, setUseSwarm] = useState(false);
+
+  // Live Palette State
+  const [livePalette, setLivePalette] = useState<string[]>([]);
+
   const canvasRef = useRef<CanvasEditorRef>(null);
 
   const [config, setConfig] = useState<RestorationConfig>({
     imageType: ImageType.DOCUMENT,
     customPrompt: '',
-    resolution: Resolution.QHD_2K, // Balanced default
-    aspectRatio: AspectRatio.ORIGINAL, // Default to Original for best restoration UX
-    colorStyle: ColorStyle.TRUE_TONE, // Default to strict fidelity
+    resolution: Resolution.QHD_2K,
+    aspectRatio: AspectRatio.ORIGINAL,
+    colorStyle: ColorStyle.TRUE_TONE,
+    detailEnhancement: 'OFF',
     brushSize: 40,
     maskBlendMode: 'add',
     vectorDetail: 'MEDIUM',
@@ -43,10 +54,18 @@ const App: React.FC = () => {
     progressMessage: ''
   });
 
-  // Check for API Key on mount
   useEffect(() => {
     checkKey();
   }, []);
+
+  // Close export menu on click outside
+  useEffect(() => {
+    const closeMenu = () => setShowExportMenu(false);
+    if(showExportMenu) {
+        document.addEventListener('click', closeMenu);
+    }
+    return () => document.removeEventListener('click', closeMenu);
+  }, [showExportMenu]);
 
   const checkKey = async () => {
     try {
@@ -54,7 +73,6 @@ const App: React.FC = () => {
             const selected = await (window as any).aistudio.hasSelectedApiKey();
             setHasKey(selected);
         } else {
-            // Fallback for environments without window.aistudio (e.g. local dev with .env)
             setHasKey(true);
         }
     } catch (e) {
@@ -69,7 +87,6 @@ const App: React.FC = () => {
     if ((window as any).aistudio) {
         try {
             await (window as any).aistudio.openSelectKey();
-            // Race condition mitigation: assume success after flow completes
             setHasKey(true);
         } catch (e) {
             console.error("Failed to select key", e);
@@ -82,16 +99,18 @@ const App: React.FC = () => {
       if (
           msg.includes("Requested entity was not found") || 
           msg.includes("UNAUTHENTICATED") || 
-          msg.includes("401") ||
+          msg.includes("401") || 
           msg.includes("API keys are not supported")
       ) {
           setHasKey(false);
-          return "Session expired or API Key invalid. Please reconnect your API Key.";
+          return "SESSION_EXPIRED";
+      }
+      if (msg === "SVG_TRUNCATED") {
+          return "SVG_TRUNCATED";
       }
       return msg;
   };
 
-  // Handlers
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -100,7 +119,7 @@ const App: React.FC = () => {
     setProcessedImage(null);
     setDisplayImage(null);
     setAnalysis(null);
-    // Reset mode to RESTORATION unless we are already in Vectorization
+    setLivePalette([]);
     if (mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT) {
         setMode(AppMode.RESTORATION); 
     }
@@ -110,13 +129,23 @@ const App: React.FC = () => {
       const dataUrl = `data:${file.type};base64,${base64}`;
       setOriginalImage(dataUrl);
       setMimeType(file.type);
+      
+      // Get Dims
+      const img = new Image();
+      img.onload = () => {
+          setImgDims({ width: img.width, height: img.height });
+      };
+      img.src = dataUrl;
 
-      // Auto-analyze
-      setProcessing(prev => ({ ...prev, progressMessage: 'Gemini is thinking: Analyzing defects & Type...' }));
+      setProcessing(prev => ({ ...prev, progressMessage: 'Analyzing defects & Topology...' }));
       const analysisResult = await analyzeImageIssues(base64, file.type);
       setAnalysis(analysisResult);
       
-      // Auto-set Image Type based on analysis
+      // Update local palette state if analysis has dominant colors
+      if (analysisResult.dominantColors && analysisResult.dominantColors.length > 0) {
+          setLivePalette(analysisResult.dominantColors);
+      }
+      
       if (analysisResult.detectedType) {
           setConfig(prev => ({
               ...prev,
@@ -132,54 +161,69 @@ const App: React.FC = () => {
   };
 
   const handleProcess = async () => {
-    // Map mode to stage string
     let stageStr: ProcessingState['stage'] = 'restoring';
     if (mode === AppMode.GENERATION) stageStr = 'generating';
     if (mode === AppMode.INPAINTING) stageStr = 'inpainting';
     if (mode === AppMode.VECTORIZATION) stageStr = 'vectorizing';
     if (mode === AppMode.EXTRACT_TEXT) stageStr = 'extracting_text';
 
-    setProcessing({ isProcessing: true, stage: stageStr, error: null, progressMessage: 'Initiating neural engine...' });
+    setProcessing({ isProcessing: true, stage: stageStr, error: null, progressMessage: 'Initializing Neuro Core...' });
 
     try {
       let resultUrl = '';
       
-      if (mode === AppMode.RESTORATION) {
+      // --- SWARM MODE EXECUTION ---
+      // If Swarm is enabled, we use the Swarm Pipeline regardless of whether we are in 'Restoration' or 'Vector' tab.
+      // Swarm now produces Raster (PNG), so this path unifies behavior.
+      if ((mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && useSwarm) {
+          if (!originalImage) throw new Error("Please upload an image first.");
+          const base64 = originalImage.split(',')[1];
+          setProcessing(prev => ({ ...prev, progressMessage: 'Swarm Agents Active...' }));
+          resultUrl = await processDocumentWithSwarm(
+              base64, 
+              mimeType, 
+              imgDims.width, 
+              imgDims.height,
+              (msg) => setProcessing(prev => ({ ...prev, progressMessage: msg }))
+          );
+      } 
+      // --- STANDARD PIPELINE ---
+      else if (mode === AppMode.RESTORATION) {
         if (!originalImage) throw new Error("Please upload an image first.");
         const base64 = originalImage.split(',')[1];
-        setProcessing(prev => ({ ...prev, progressMessage: 'Phase 1: Descreening & Dot Melting...' }));
+        setProcessing(prev => ({ ...prev, progressMessage: 'Applying Reflexion Loop & Correction...' }));
         resultUrl = await restoreOrEditImage(base64, mimeType, config, analysis || undefined);
       } 
       else if (mode === AppMode.INPAINTING) {
           if (!canvasRef.current) throw new Error("Canvas not initialized");
-          // Get image from canvas (which includes the mask/outpainting borders)
           const canvasDataUrl = canvasRef.current.getImageData();
           const base64 = canvasDataUrl.split(',')[1];
-          setProcessing(prev => ({ ...prev, progressMessage: 'Inpainting/Outpainting regions...' }));
+          setProcessing(prev => ({ ...prev, progressMessage: 'Inpainting Context...' }));
           resultUrl = await inpaintImage(base64, 'image/png', config);
       }
       else if (mode === AppMode.VECTORIZATION) {
           if (!originalImage) throw new Error("Please upload an image first.");
           const base64 = originalImage.split(',')[1];
-          setProcessing(prev => ({ ...prev, progressMessage: 'Tracing topology & separating layers...' }));
-          resultUrl = await vectorizeImage(base64, mimeType, config);
+          setProcessing(prev => ({ ...prev, progressMessage: 'Constructing Vector Topology...' }));
+          
+          // Pass the analyzed palette to enforce quantization!
+          resultUrl = await vectorizeImage(base64, mimeType, config, livePalette);
       }
       else if (mode === AppMode.EXTRACT_TEXT) {
           if (!originalImage) throw new Error("Please upload an image first.");
           const base64 = originalImage.split(',')[1];
-          setProcessing(prev => ({ ...prev, progressMessage: 'Isolating textual semantics & removing background...' }));
+          setProcessing(prev => ({ ...prev, progressMessage: 'Extracting Semantic Text...' }));
           resultUrl = await extractText(base64, mimeType);
       }
       else {
         if (!config.customPrompt) throw new Error("Please provide a prompt for generation.");
-        setProcessing(prev => ({ ...prev, progressMessage: 'Generating new visual data...' }));
+        setProcessing(prev => ({ ...prev, progressMessage: 'Generating visuals...' }));
         resultUrl = await generateNewImage(config.customPrompt, config);
       }
 
       setProcessedImage(resultUrl);
-      setDisplayImage(resultUrl); // Initialize display image with result
+      setDisplayImage(resultUrl);
       
-      // If Inpainting, update the canvas source to the new result so user can continue editing
       if (mode === AppMode.INPAINTING) {
           setOriginalImage(resultUrl);
       }
@@ -192,69 +236,134 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDownload = () => {
-      // If LayerPanel is active, it handles its own download. 
-      // This is a fallback or for non-vector modes.
-      if (displayImage) {
-          const link = document.createElement('a');
-          link.href = displayImage;
-          const ext = (mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) ? 'svg' : 'png';
-          link.download = `neuro_output_${Date.now()}.${ext}`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
+  const processSVGDownload = (url: string, type: 'full' | 'text' | 'nobg') => {
+      // Decode SVG
+      try {
+          const base64 = url.split(',')[1];
+          const decoded = decodeURIComponent(escape(atob(base64)));
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(decoded, "image/svg+xml");
+
+          if (type === 'text') {
+              ['layer_graphics', 'layer_background'].forEach(id => {
+                  const el = doc.getElementById(id);
+                  if (el) el.remove();
+              });
+          } else if (type === 'nobg') {
+              const el = doc.getElementById('layer_background');
+              if (el) el.remove();
+          }
+
+          const serializer = new XMLSerializer();
+          const finalSvg = serializer.serializeToString(doc);
+          const blob = new Blob([finalSvg], { type: 'image/svg+xml' });
+          return URL.createObjectURL(blob);
+      } catch (e) {
+          console.error("SVG Processing Error", e);
+          return url;
       }
   };
+
+  const handleSmartDownload = (format: 'png' | 'svg', svgType: 'full' | 'text' | 'nobg' = 'full') => {
+      let downloadUrl = displayImage;
+      let ext = format;
+      
+      if (!downloadUrl) return;
+
+      if (mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) {
+          if (format === 'svg') {
+              downloadUrl = processSVGDownload(downloadUrl, svgType);
+          } else {
+              ext = 'png'; 
+          }
+      }
+
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `neuro_export_${mode.toLowerCase()}_${svgType}_${Date.now()}.${ext}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
+  // --- SVG Color Remix Logic ---
+  const handleColorRemix = (oldColor: string, newColor: string) => {
+     if (!displayImage || !displayImage.startsWith('data:image/svg+xml')) return;
+     
+     try {
+         // 1. Decode current SVG
+         const base64 = displayImage.split(',')[1];
+         let svgStr = decodeURIComponent(escape(atob(base64)));
+
+         // 2. Perform Global Replacement (Case insensitive regex)
+         // Escape special regex chars in hex just in case (though hex usually pure)
+         const regex = new RegExp(oldColor, 'gi'); 
+         svgStr = svgStr.replace(regex, newColor);
+
+         // 3. Re-encode
+         const newBase64 = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgStr)))}`;
+         
+         // 4. Update View & Palette State
+         setDisplayImage(newBase64);
+         setProcessedImage(newBase64); // Keep them in sync
+         
+         // Update the local palette array so the UI reflects the change (The circle becomes the new color)
+         setLivePalette(prev => prev.map(c => c.toLowerCase() === oldColor.toLowerCase() ? newColor : c));
+
+     } catch(e) {
+         console.error("Remix failed", e);
+     }
+  };
+
 
   // --- Auth & Loading Screens ---
 
   if (isCheckingKey) {
       return (
-        <div className="bg-gray-950 h-screen w-full flex items-center justify-center">
-            <div className="text-cyan-500 animate-pulse text-sm font-mono">INITIALIZING NEURO-CORE...</div>
+        <div className="h-screen w-full flex items-center justify-center bg-morandi-base">
+            <div className="flex flex-col items-center">
+                 <div className="w-12 h-12 rounded-full border-2 border-morandi-blue border-t-transparent animate-spin mb-4"></div>
+                 <div className="text-morandi-dark font-medium tracking-wide text-sm">System Initializing</div>
+            </div>
         </div>
       );
   }
 
   if (!hasKey) {
       return (
-        <div className="bg-gray-950 h-screen w-full flex items-center justify-center p-4 relative overflow-hidden">
-            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] opacity-50"></div>
+        <div className="h-screen w-full flex items-center justify-center p-6 bg-morandi-base relative overflow-hidden">
+            <div className="absolute inset-0 bg-white/40 backdrop-blur-3xl z-0"></div>
             
-            <div className="relative z-10 max-w-lg w-full bg-gray-900/80 backdrop-blur-xl border border-gray-800 rounded-2xl p-10 text-center shadow-2xl shadow-black">
-                <div className="w-20 h-20 bg-gradient-to-br from-cyan-500 to-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-lg shadow-cyan-900/50">
-                    <svg className="w-10 h-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                    </svg>
+            <div className="relative z-10 max-w-md w-full glass-panel p-10 text-center shadow-glass rounded-3xl animate-slide-up">
+                <div className="w-16 h-16 bg-morandi-dark text-white rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl">
+                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
                 </div>
                 
-                <h1 className="text-3xl font-bold text-white mb-2 tracking-tight">
-                    NeuroRestore Pro
-                </h1>
-                <p className="text-gray-400 mb-8 text-sm leading-relaxed">
-                    Access Gemini 3 Pro Vision & Image Preview models for high-fidelity forensic restoration and upscaling.
+                <h1 className="text-2xl font-bold text-morandi-dark mb-2">NeuroRestore Pro</h1>
+                <p className="text-gray-500 mb-8 text-sm leading-relaxed">
+                    Forensic-grade image restoration powered by Gemini 3.0 Vision.
                 </p>
 
                 <button 
                     onClick={handleSelectKey}
-                    className="w-full py-4 bg-white text-gray-900 hover:bg-gray-100 font-bold rounded-xl transition-all mb-6 flex items-center justify-center gap-2 group"
+                    className="w-full py-3.5 bg-morandi-dark text-white hover:bg-black rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 group"
                 >
-                    <span>Connect Google Cloud Project</span>
-                    <svg className="w-4 h-4 text-gray-600 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-                    </svg>
+                    <span>Connect Access Key</span>
+                    <svg className="w-4 h-4 text-gray-400 group-hover:translate-x-1 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
                 </button>
-
-                <p className="text-[10px] text-gray-600 uppercase tracking-widest border-t border-gray-800 pt-6">
-                    Requires a paid project • <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="text-cyan-600 hover:text-cyan-400 hover:underline transition-colors">Billing Documentation</a>
-                </p>
+                <div className="mt-4 text-[10px] text-gray-400">Secure connection via Google Cloud AI</div>
             </div>
         </div>
       );
   }
 
+  // UPDATED: Determine if we are in Vector Mode.
+  // Crucially, IF useSwarm IS TRUE, we are NOT in vector mode (even if the tab says Vector), 
+  // because Swarm outputs PNG rasters. This prevents the LayerPanel from trying to parse PNGs as SVG.
+  const isVectorMode = (mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && !useSwarm;
+
   return (
-    <div className="flex h-screen w-full bg-gray-950 text-white font-sans overflow-hidden">
+    <div className="flex h-screen w-full font-sans overflow-hidden text-morandi-dark">
       
       {/* Left Sidebar */}
       <ControlPanel 
@@ -267,73 +376,93 @@ const App: React.FC = () => {
         disabled={(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && !originalImage}
         onExpand={(dir) => canvasRef.current?.expandCanvas(dir, 25)}
         onClearMask={() => canvasRef.current?.clearMask()}
+        dominantColors={livePalette}
+        onColorRemix={handleColorRemix}
+        useSwarm={useSwarm}
+        setUseSwarm={setUseSwarm}
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full relative">
+      <div className="flex-1 flex flex-col h-full relative z-0">
         
         {/* Header/Toolbar */}
-        <div className="h-16 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between px-6 backdrop-blur-sm z-20">
-            <div className="flex items-center gap-4">
+        <div className="h-20 flex items-center justify-between px-8 z-20">
+             {/* Left Action: Upload */}
+             <div className="flex items-center gap-4">
                 {(mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
-                     <label className="cursor-pointer bg-gray-800 hover:bg-gray-700 text-gray-200 px-4 py-2 rounded text-sm font-medium transition-colors border border-gray-700">
-                     <span>{originalImage ? 'Replace Image' : 'Upload Image'}</span>
+                     <label className="cursor-pointer glass-button px-5 py-2.5 rounded-xl text-xs font-bold text-morandi-dark flex items-center gap-2 transition-all">
+                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                     <span>{originalImage ? 'Replace Image' : 'Upload Source'}</span>
                      <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                    </label>
                 )}
                
+               {/* Analysis Badges */}
                {analysis && (mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
-                   <div className="flex flex-wrap gap-2 items-center">
-                       {analysis.description && (
-                           <div className="text-xs text-gray-300 bg-gray-800 px-3 py-1.5 rounded-full border border-gray-700 flex items-center gap-2">
-                               <svg className="w-3 h-3 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                               <span className="max-w-[200px] truncate" title={analysis.description}>{analysis.description}</span>
-                           </div>
-                       )}
+                   <div className="flex flex-wrap gap-2 items-center animate-fade-in">
                        {analysis.requiresDescreening && (
-                           <div className="text-xs text-yellow-200 bg-yellow-900/40 px-3 py-1.5 rounded-full border border-yellow-500/50 flex items-center gap-2 shadow-[0_0_10px_rgba(234,179,8,0.1)]">
-                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                               </svg>
-                               <span className="font-bold tracking-wide">DESCREENING ACTIVE</span>
+                           <div className="px-3 py-1.5 rounded-full bg-white/60 border border-white text-[10px] font-bold text-morandi-blue flex items-center gap-2 shadow-sm">
+                               <span className="w-1.5 h-1.5 rounded-full bg-morandi-blue animate-pulse"></span>
+                               DESCREENING ACTIVE
                            </div>
                        )}
-                       <div className="text-xs text-cyan-500 bg-cyan-900/20 px-3 py-1.5 rounded-full border border-cyan-900/50 flex items-center gap-2">
-                           <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></span>
-                           Issues: {analysis.issues.slice(0, 3).join(', ')}
-                       </div>
                    </div>
                )}
             </div>
 
+            {/* Right Action: Smart Export Menu */}
             <div className="flex items-center gap-3">
-                 {processing.isProcessing && (
-                     <div className="flex items-center gap-2 text-cyan-400 text-sm animate-pulse">
-                         <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                         {processing.progressMessage}
-                     </div>
+                 {/* Replaced old text loader with nothing, now handled by Overlay */}
+                 
+                 {displayImage && mode !== AppMode.INPAINTING && (
+                    <div className="relative" onClick={(e) => e.stopPropagation()}>
+                        <button 
+                            onClick={() => setShowExportMenu(!showExportMenu)}
+                            className={`glass-button px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${showExportMenu ? 'bg-morandi-dark text-white hover:bg-morandi-dark' : 'text-morandi-dark hover:bg-white hover:text-black'}`}
+                        >
+                            <span>Export Assets</span>
+                            <svg className={`w-4 h-4 transition-transform duration-300 ${showExportMenu ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                        </button>
+                        
+                        {/* Dropdown Menu */}
+                        {showExportMenu && (
+                            <div className="absolute right-0 top-full mt-2 w-56 glass-panel rounded-2xl shadow-xl p-2 animate-fade-in flex flex-col gap-1 z-50">
+                                
+                                <div className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200/50 mb-1">
+                                    {isVectorMode ? 'Vector Formats' : 'Raster Formats'}
+                                </div>
+
+                                {isVectorMode ? (
+                                    <>
+                                        <button onClick={() => handleSmartDownload('svg', 'full')} className="text-left w-full px-3 py-2 text-xs font-medium text-gray-700 hover:bg-white hover:text-morandi-dark rounded-xl transition-colors flex justify-between items-center group">
+                                            <span>Full Vector (SVG)</span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-[10px] bg-gray-100 px-1 rounded"> Editable</span>
+                                        </button>
+                                        <button onClick={() => handleSmartDownload('svg', 'text')} className="text-left w-full px-3 py-2 text-xs font-medium text-gray-700 hover:bg-white hover:text-morandi-dark rounded-xl transition-colors flex justify-between items-center group">
+                                            <span>Text Only (SVG)</span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-[10px] bg-gray-100 px-1 rounded"> Overlay</span>
+                                        </button>
+                                        <button onClick={() => handleSmartDownload('svg', 'nobg')} className="text-left w-full px-3 py-2 text-xs font-medium text-gray-700 hover:bg-white hover:text-morandi-dark rounded-xl transition-colors flex justify-between items-center group">
+                                            <span>Transparent (SVG)</span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-[10px] bg-gray-100 px-1 rounded"> No BG</span>
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button onClick={() => handleSmartDownload('png')} className="text-left w-full px-3 py-2 text-xs font-medium text-gray-700 hover:bg-white hover:text-morandi-dark rounded-xl transition-colors">
+                                            High-Res PNG
+                                        </button>
+                                        <button onClick={() => handleSmartDownload('png')} className="text-left w-full px-3 py-2 text-xs font-medium text-gray-700 hover:bg-white hover:text-morandi-dark rounded-xl transition-colors opacity-50 cursor-not-allowed">
+                                            Compressed JPG
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
                  )}
-                 {displayImage && mode !== AppMode.INPAINTING && mode !== AppMode.VECTORIZATION && mode !== AppMode.EXTRACT_TEXT && (
-                    <button 
-                        onClick={handleDownload}
-                        className="px-4 py-2 rounded text-sm font-medium transition-colors border bg-gray-800 hover:bg-cyan-900 text-cyan-400 hover:text-cyan-200 border-cyan-900"
-                    >
-                        Download Result
-                    </button>
-                 )}
-                 {/* Vector & Extract Text modes have LayerPanel for download, but we keep this as a quick main download */}
-                 {(mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && displayImage && (
-                    <button 
-                        onClick={handleDownload}
-                        className={`px-4 py-2 rounded text-sm font-medium transition-colors border ${
-                           mode === AppMode.EXTRACT_TEXT
-                           ? 'bg-green-900/50 border-green-500 text-green-200 hover:bg-green-800'
-                           : 'bg-purple-900/50 border-purple-500 text-purple-200 hover:bg-purple-800'
-                        }`}
-                    >
-                        Download SVG
-                    </button>
-                 )}
+
+                 {/* Special Download for Canvas/Vector */}
                  {mode === AppMode.INPAINTING && originalImage && (
                     <button 
                         onClick={() => {
@@ -344,7 +473,7 @@ const App: React.FC = () => {
                                 link.click();
                             }
                         }}
-                        className="bg-gray-800 hover:bg-cyan-900 text-cyan-400 hover:text-cyan-200 border border-cyan-900 px-4 py-2 rounded text-sm font-medium transition-colors"
+                        className="glass-button px-5 py-2.5 rounded-xl text-xs font-bold text-morandi-dark flex items-center gap-2"
                     >
                         Save Canvas
                     </button>
@@ -353,22 +482,30 @@ const App: React.FC = () => {
         </div>
 
         {/* Viewport */}
-        <div className="flex-1 relative bg-[url('https://www.transparenttextures.com/patterns/dark-matter.png')] bg-gray-900 p-8 flex items-center justify-center overflow-hidden">
+        <div className="flex-1 flex items-center justify-center p-8 overflow-hidden relative">
             
+            {/* PROCESSING OVERLAY */}
+            <ProcessingOverlay 
+                mode={mode} 
+                isVisible={processing.isProcessing} 
+                analysis={analysis}
+            />
+
             {/* Empty State */}
-            {!originalImage && (mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
-                <div className="text-center p-12 border-2 border-dashed border-gray-800 rounded-xl max-w-lg">
-                    <div className="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-6">
-                        <svg className="w-10 h-10 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            {!originalImage && !processing.isProcessing && (mode === AppMode.RESTORATION || mode === AppMode.INPAINTING || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && (
+                <div className="text-center p-16 glass-panel rounded-3xl max-w-lg border-2 border-dashed border-white/50">
+                    <div className="w-24 h-24 bg-white/50 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner-light">
+                        <svg className="w-10 h-10 text-morandi-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
                     </div>
-                    <h3 className="text-xl font-medium text-gray-300 mb-2">Upload a scan or illustration</h3>
-                    <p className="text-gray-500 text-sm mb-6">
-                        {mode === AppMode.INPAINTING ? "Inpaint/Outpaint mode requires a source image." : "Supports documents, comics, and vector art."}
+                    <h3 className="text-2xl font-bold text-morandi-dark mb-3">Drag & Drop or Select</h3>
+                    <p className="text-gray-500 text-sm mb-8 leading-relaxed">
+                        Supports high-resolution scans, illustrations, and photos.<br/>
+                        We handle the descreening automatically.
                     </p>
-                    <label className="cursor-pointer bg-cyan-700 hover:bg-cyan-600 text-white px-6 py-3 rounded shadow-lg shadow-cyan-900/50 transition-all">
-                        Select File
+                    <label className="cursor-pointer bg-morandi-dark hover:bg-black text-white px-8 py-4 rounded-xl shadow-lg transition-transform hover:scale-105 inline-flex items-center gap-2 font-semibold">
+                        <span>Upload Source File</span>
                         <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                     </label>
                 </div>
@@ -376,24 +513,65 @@ const App: React.FC = () => {
 
             {/* Empty State Generation */}
             {!processedImage && mode === AppMode.GENERATION && !processing.isProcessing && (
-                 <div className="text-center p-12 max-w-lg">
-                     <h3 className="text-xl font-medium text-gray-300 mb-2">Generative Mode</h3>
-                     <p className="text-gray-500 text-sm">Enter a prompt in the sidebar and click Generate to create high-fidelity art.</p>
+                 <div className="text-center p-12 max-w-lg glass-panel rounded-3xl">
+                     <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                        <svg className="w-8 h-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                     </div>
+                     <h3 className="text-xl font-bold text-morandi-dark mb-2">Creative Mode</h3>
+                     <p className="text-gray-500 text-sm">Describe your vision in the sidebar to generate high-fidelity concepts.</p>
                  </div>
             )}
 
             {/* Error State */}
             {processing.error && (
-                <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50">
-                    <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-lg max-w-md text-center">
-                        <h3 className="text-red-400 font-bold mb-2">Process Failed</h3>
-                        <p className="text-red-200 text-sm">{processing.error}</p>
-                        <button 
-                            onClick={() => setProcessing(p => ({...p, error: null}))}
-                            className="mt-4 text-sm text-red-300 hover:text-white underline"
-                        >
-                            Dismiss
-                        </button>
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-50 animate-fade-in">
+                    <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md text-center border border-red-100 relative">
+                        {/* Specific UI for SVG Truncation */}
+                        {processing.error === "SVG_TRUNCATED" ? (
+                            <>
+                                <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-5 text-orange-500 shadow-sm">
+                                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                </div>
+                                <h3 className="text-xl font-bold text-gray-800 mb-2">Complexity Overload</h3>
+                                <p className="text-gray-500 text-sm mb-6 leading-relaxed">
+                                    The vector engine reached its token limit. The image contains too many fine details or textures for a single pass.
+                                </p>
+                                <div className="flex gap-3 justify-center">
+                                    <button 
+                                        onClick={() => {
+                                            setConfig(prev => ({ ...prev, vectorDetail: 'LOW' }));
+                                            setProcessing(p => ({...p, error: null}));
+                                            // Optional: trigger process again immediately
+                                        }}
+                                        className="px-5 py-3 bg-morandi-dark text-white rounded-xl text-xs font-bold hover:bg-black transition-all shadow-lg flex items-center gap-2"
+                                    >
+                                        <span>Switch to 'Low Detail'</span>
+                                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                    </button>
+                                    <button 
+                                        onClick={() => setProcessing(p => ({...p, error: null}))}
+                                        className="px-5 py-3 border border-gray-200 text-gray-600 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            /* Generic Error UI */
+                            <>
+                                <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+                                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                </div>
+                                <h3 className="text-red-500 font-bold mb-2">Process Interrupted</h3>
+                                <p className="text-gray-600 text-sm mb-6">{processing.error === "SESSION_EXPIRED" ? "Session expired. Please reconnect your API key." : processing.error}</p>
+                                <button 
+                                    onClick={() => setProcessing(p => ({...p, error: null}))}
+                                    className="text-sm font-semibold text-gray-800 underline hover:text-black"
+                                >
+                                    Dismiss
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
             )}
@@ -402,25 +580,25 @@ const App: React.FC = () => {
             <div className="w-full h-full max-w-6xl flex items-center justify-center relative">
                 
                 {/* RESTORATION, VECTORIZATION & EXTRACT MODE: Comparison Slider */}
-                {/* Note: We reuse Comparison Slider for Vectorization/Extract because the SVG is converted to Base64 Image! */}
-                {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && originalImage && (
+                {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && originalImage && !processing.isProcessing && (
                     <>
                         {displayImage ? (
                             <ComparisonSlider 
                                 originalImage={originalImage} 
                                 restoredImage={displayImage} 
-                                className="shadow-2xl shadow-black"
+                                className="shadow-2xl shadow-morandi-dark/10"
                             />
                         ) : (
-                            <div className="relative h-full w-full flex items-center justify-center">
+                            <div className="relative h-full w-full flex items-center justify-center p-8">
                                 <img 
                                     src={originalImage} 
                                     alt="Original" 
-                                    className="max-w-full max-h-full object-contain rounded-lg shadow-xl" 
+                                    className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl shadow-morandi-dark/10" 
                                 />
-                                {analysis && !processing.isProcessing && (
-                                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur px-4 py-2 rounded-full text-sm text-gray-300 border border-gray-700">
-                                        Analysis Complete. Ready to {mode === AppMode.VECTORIZATION ? 'Vectorize' : mode === AppMode.EXTRACT_TEXT ? 'Isolate Text' : 'Re-Render'}.
+                                {analysis && (
+                                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 glass-panel px-6 py-3 rounded-full text-xs font-semibold text-gray-600 flex items-center gap-2 shadow-lg animate-slide-up">
+                                        <div className="w-2 h-2 rounded-full bg-green-400"></div>
+                                        Scan Analyzed. Ready to {mode === AppMode.VECTORIZATION ? 'Vectorize' : mode === AppMode.EXTRACT_TEXT ? 'Isolate' : 'Restore'}.
                                     </div>
                                 )}
                             </div>
@@ -429,28 +607,28 @@ const App: React.FC = () => {
                 )}
 
                 {/* INPAINTING MODE: Canvas Editor */}
-                {mode === AppMode.INPAINTING && originalImage && (
+                {mode === AppMode.INPAINTING && originalImage && !processing.isProcessing && (
                     <CanvasEditor
                         ref={canvasRef}
-                        imageSrc={originalImage} // In Inpainting mode, processedImage becomes the new "original" in the editor flow
+                        imageSrc={originalImage} 
                         brushSize={config.brushSize}
                         maskBlendMode={config.maskBlendMode}
-                        className="w-full h-full shadow-2xl shadow-black bg-gray-900 border border-gray-800 rounded-lg"
+                        className="w-full h-full shadow-2xl shadow-morandi-dark/10 bg-gray-100 rounded-2xl border border-white"
                     />
                 )}
 
                 {/* GENERATION MODE: Simple Image */}
-                {mode === AppMode.GENERATION && displayImage && (
+                {mode === AppMode.GENERATION && displayImage && !processing.isProcessing && (
                     <img 
                         src={displayImage} 
                         alt="Generated" 
-                        className="max-w-full max-h-full object-contain rounded-lg shadow-2xl shadow-cyan-900/20" 
+                        className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl shadow-morandi-dark/10" 
                     />
                 )}
 
-                {/* Floating Layer Panel (For Vector & Extract Modes with Result) */}
-                {(mode === AppMode.VECTORIZATION || mode === AppMode.EXTRACT_TEXT) && processedImage && (
-                    <div className="absolute top-4 right-4 z-20 animate-in fade-in slide-in-from-right-4">
+                {/* Floating Layer Panel - ONLY for true Vector Modes */}
+                {(isVectorMode) && processedImage && !processing.isProcessing && (
+                    <div className="absolute top-8 right-8 z-20 animate-fade-in">
                         <LayerPanel 
                             svgDataUrl={processedImage} 
                             onUpdateView={setDisplayImage} 
