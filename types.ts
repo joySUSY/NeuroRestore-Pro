@@ -67,6 +67,7 @@ export interface AnalysisResult {
   requiresDescreening?: boolean; // Critical for scan restoration
   description?: string; // Brief technical description
   dominantColors?: string[]; // Array of Hex Codes for quantization
+  detectedWatermarks?: string[]; // New: List of words to be suppressed during restoration
 }
 
 export interface ProcessingState {

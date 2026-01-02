@@ -345,8 +345,9 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
     1. **Halftone/Screen Detection:** Detect periodic halftone dot patterns (CMYK rosettes), screen tones, or Moiré patterns.
     2. **Z-Axis Structure:** Identify background layers (watermarks, patterns) vs foreground content.
     3. **Text Legibility:** Assess if text is blurred, faded, or has broken strokes.
+    4. **Watermark Detection:** Identify any repeated background text (e.g. "VOID", "COPY", "DRAFT").
 
-    Return a JSON object with specific focus on whether 'descreening' is required.
+    Return a JSON object with specific focus on whether 'descreening' is required and detecting watermarks.
     `;
 
     try {
@@ -357,7 +358,7 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
                 config: {
                     responseMimeType: "application/json",
                     maxOutputTokens: 8192,
-                    thinkingConfig: { thinkingBudget: 4096 }, // Increased for high intelligence
+                    thinkingConfig: { thinkingBudget: 8192 }, // INCREASED to 8K for deeper analysis
                     responseSchema: {
                         type: Type.OBJECT,
                         properties: {
@@ -369,7 +370,8 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
                             dominantColors: { type: Type.ARRAY, items: { type: Type.STRING } },
                             detectedType: { type: Type.STRING, enum: ['DOCUMENT', 'DIGITAL_ART', 'PHOTO'] },
                             detectedMaterial: { type: Type.STRING },
-                            requiresDescreening: { type: Type.BOOLEAN, description: "True if halftone dots or moire patterns are detected." }
+                            requiresDescreening: { type: Type.BOOLEAN, description: "True if halftone dots or moire patterns are detected." },
+                            detectedWatermarks: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of words detected as background watermarks to be suppressed." }
                         }
                     }
                 }
@@ -393,7 +395,8 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
             description: "Analysis failed.",
             detectedType: ImageType.DOCUMENT,
             requiresDescreening: false,
-            dominantColors: []
+            dominantColors: [],
+            detectedWatermarks: []
         };
     }
 };
@@ -406,7 +409,7 @@ export const restoreOrEditImage = async (
     analysis?: AnalysisResult
 ): Promise<string> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview";
+    const model = "gemini-3-pro-image-preview"; // IMAGE MODEL
 
     const { width, height } = await getImageDimensions(base64Image, mimeType);
     let targetAspectRatio = config.aspectRatio === AspectRatio.ORIGINAL ? await getClosestAspectRatio(base64Image, mimeType) : config.aspectRatio as string;
@@ -414,6 +417,18 @@ export const restoreOrEditImage = async (
 
     const enhancementInstruction = getEnhancementInstruction(config.detailEnhancement);
     const descreenNeeded = analysis?.requiresDescreening ? "CRITICAL: REMOVE HALFTONE DOTS (DESCREEN)." : "";
+    
+    const watermarks = analysis?.detectedWatermarks || [];
+    const negativeConstraint = watermarks.length > 0 
+        ? `
+    *** NEGATIVE CONSTRAINT (WATERMARKS) ***
+    Detected Background Text: [${watermarks.join(', ')}]
+    INSTRUCTION: Do NOT sharpen or enhance these specific words. 
+    - Treat them as part of the paper substrate (Layer 1).
+    - They must remain faint, blurred, or texture-like.
+    - Do NOT render them as crisp typography.
+    `
+        : "";
 
     // Z-Axis Mental Model Injection
     const zAxisPrompt = `
@@ -423,6 +438,8 @@ export const restoreOrEditImage = async (
     - **Layer 2 (Middle):** Pre-printed form lines/boxes. -> RESTORE SHARPNESS.
     - **Layer 3 (Top):** User Ink, Stamps, Typewriter Text. -> MAXIMIZE CLARITY.
     
+    ${negativeConstraint}
+
     ACTION: Focus restoration energy on Layer 2 and Layer 3. Keep Layer 1 subtle and recessive.
     `;
 
@@ -587,7 +604,7 @@ export const vectorizeImage = async (
             config: { 
                 temperature: 0.2, 
                 maxOutputTokens: 32768, 
-                thinkingConfig: { thinkingBudget: 16384 } // High budget for complex SVG reasoning
+                thinkingConfig: { thinkingBudget: 32768 } // MAXIMIZED thinking budget for complex SVG reasoning
             }
         });
 
@@ -634,8 +651,9 @@ export const extractText = async (
        - Check if Quantity * Unit Price = Line Total.
        - Check if Subtotals sum to Final Total.
     2. AUTO-CORRECTION:
-       - If OCR sees "700.00" but logic dictates "100.00" (e.g. 10 x 10), output "100.00".
+       - If OCR reads "700.00" but logic dictates "100.00" (e.g. 10 x 10), output "100.00".
        - Set "logicCorrected": true.
+       - Use CODE EXECUTION to verify the math if unsure.
     3. HANDWRITING DETECTION:
        - If a field is a Signature or handwritten note, tag type as 'handwriting'.
 
@@ -655,9 +673,10 @@ export const extractText = async (
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
+                tools: [{codeExecution: {}}], // Enable code execution for math checks
                 responseMimeType: "application/json",
                 maxOutputTokens: 16384,
-                thinkingConfig: { thinkingBudget: 8192 }, // High budget for logic reasoning
+                thinkingConfig: { thinkingBudget: 16384 }, // INCREASED to 16K for logic reasoning
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {

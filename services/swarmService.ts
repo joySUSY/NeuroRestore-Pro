@@ -43,6 +43,7 @@ export interface AuditResult {
     verificationLog: string[];
     groundingMetadata?: any;
     mathCorrections: { original: string, corrected: string, note: string }[];
+    watermarks?: string[]; // New: List of background words to suppress
 }
 
 // --- MODULE A: THE SCOUT (Gemini 3 Pro) ---
@@ -67,7 +68,7 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
         config: {
             responseMimeType: "application/json",
             maxOutputTokens: 8192,
-            thinkingConfig: { thinkingBudget: 2048 },
+            thinkingConfig: { thinkingBudget: 8192 }, // INCREASED for accurate topology mapping
             responseSchema: {
                 type: Type.OBJECT,
                 properties: {
@@ -118,6 +119,8 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
        - IF Image says "Total: $500" but Python calculates "$505", TRUST THE PYTHON.
        - FLAG this as a logic correction.
 
+    4. **Watermark Detection**: List distinct words appearing as background patterns (e.g. 'VOID', 'COPY').
+
     OUTPUT: JSON Object.
     IMPORTANT: Since the document structure is dynamic, return 'verifiedData' as a STRINGIFIED JSON string.
     `;
@@ -132,8 +135,8 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
                 { codeExecution: {} }    // Verify Math/Logic
             ], 
             responseMimeType: "application/json",
-            maxOutputTokens: 32768, // Increased to accommodate high thinking
-            thinkingConfig: { thinkingBudget: 16384 }, // EXTREME THOUGHT BUDGET (System 2)
+            maxOutputTokens: 32768, // Increased to accommodate high thinking output
+            thinkingConfig: { thinkingBudget: 32768 }, // MAXIMIZED THOUGHT BUDGET (System 2)
             responseSchema: {
                 type: Type.OBJECT,
                 properties: {
@@ -149,7 +152,8 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
                                 note: { type: Type.STRING }
                             }
                         } 
-                    }
+                    },
+                    watermarks: { type: Type.ARRAY, items: { type: Type.STRING } }
                 }
             }
         }
@@ -175,7 +179,8 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
         verifiedData: cleanVerifiedData,
         verificationLog: rawResult.verificationLog || [],
         mathCorrections: rawResult.mathCorrections || [],
-        groundingMetadata: response.candidates?.[0]?.groundingMetadata
+        groundingMetadata: response.candidates?.[0]?.groundingMetadata,
+        watermarks: rawResult.watermarks || []
     };
     
     return result;
@@ -191,7 +196,7 @@ export const renderHighDefRaster = async (
     auditData: AuditResult
 ): Promise<string> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview";
+    const model = "gemini-3-pro-image-preview"; // IMAGE MODEL
 
     // 1. Determine Corrections from Auditor
     let correctionPrompt = "";
@@ -201,6 +206,18 @@ export const renderHighDefRaster = async (
             correctionPrompt += `- CHANGE VISUAL TEXT "${c.original}" TO "${c.corrected}" (Reason: ${c.note})\n`;
         });
     }
+
+    const watermarks = auditData.watermarks || [];
+    const negativeConstraint = watermarks.length > 0 
+        ? `
+    *** NEGATIVE CONSTRAINT (WATERMARKS) ***
+    Detected Background Text: [${watermarks.join(', ')}]
+    INSTRUCTION: Do NOT sharpen or enhance these specific words. 
+    - Treat them as part of the paper substrate (Layer 1).
+    - They must remain faint, blurred, or texture-like.
+    - Do NOT render them as crisp typography.
+    `
+        : "";
 
     // 2. Formatting Grounded Data for the Prompt
     const dataSummary = JSON.stringify(auditData.verifiedData).slice(0, 2000); // Truncate to avoid context limit if massive
@@ -216,6 +233,8 @@ export const renderHighDefRaster = async (
     ${dataSummary}
 
     ${correctionPrompt}
+
+    ${negativeConstraint}
     
     VISUAL QUALITY STANDARDS:
     1. **Lossless Fidelity**: Output at maximum bitrate. Texture should be hyper-realistic (paper grain, ink sheen).
