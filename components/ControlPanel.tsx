@@ -38,29 +38,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   
   // --- Tooltip State ---
   const [tooltip, setTooltip] = useState<string | null>(null);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-        setMousePos({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, []);
 
   const handleChange = (key: keyof RestorationConfig, value: any) => {
     setConfig(prev => ({ ...prev, [key]: value }));
   };
-
-  const handleReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              handleChange('referenceImage', reader.result as string);
-          };
-          reader.readAsDataURL(file);
-      }
+  
+  const handlePhysicsChange = (key: keyof RestorationConfig['physics'], value: boolean) => {
+      setConfig(prev => ({ ...prev, physics: { ...prev.physics, [key]: value } }));
   };
 
   // Helper for Segmented Control
@@ -133,6 +117,55 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 </div>
             )}
 
+            {/* PHYSICS CORE - NEW ADVANCED ALGORITHMS */}
+            {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && (
+                <div className="p-5 bg-orange-50/50 rounded-2xl border border-orange-100 shadow-soft space-y-4">
+                     <h3 className="text-xs font-bold text-orange-800 uppercase tracking-wider flex items-center gap-2">
+                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                         Physics Core
+                     </h3>
+                     
+                     <div className="space-y-3">
+                         {/* DocTr Toggle */}
+                         <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium text-gray-600">3D Dewarping (DocTr)</span>
+                            <button 
+                                onClick={() => handlePhysicsChange('enableDewarping', !config.physics.enableDewarping)}
+                                className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableDewarping ? 'bg-orange-500' : 'bg-gray-200'}`}
+                            >
+                                <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableDewarping ? 'translate-x-4' : 'translate-x-0'}`} />
+                            </button>
+                         </div>
+
+                         {/* Intrinsic Toggle (Restoration Only) */}
+                         {mode === AppMode.RESTORATION && (
+                             <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-medium text-gray-600">Intrinsic Albedo (PIDNet)</span>
+                                <button 
+                                    onClick={() => handlePhysicsChange('enableIntrinsic', !config.physics.enableIntrinsic)}
+                                    className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableIntrinsic ? 'bg-orange-500' : 'bg-gray-200'}`}
+                                >
+                                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableIntrinsic ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </button>
+                             </div>
+                         )}
+
+                         {/* DiffVG Toggle (Vector Only) */}
+                         {mode === AppMode.VECTORIZATION && (
+                             <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-medium text-gray-600">DiffVG Fitting (Opt)</span>
+                                <button 
+                                    onClick={() => handlePhysicsChange('enableDiffVG', !config.physics.enableDiffVG)}
+                                    className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableDiffVG ? 'bg-orange-500' : 'bg-gray-200'}`}
+                                >
+                                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableDiffVG ? 'translate-x-4' : 'translate-x-0'}`} />
+                                </button>
+                             </div>
+                         )}
+                     </div>
+                </div>
+            )}
+
             {/* LIVE PALETTE REMIXER (VECTOR MODE) */}
             {mode === AppMode.VECTORIZATION && dominantColors && dominantColors.length > 0 && (
                 <div className="p-5 bg-white rounded-2xl border border-gray-200 shadow-soft space-y-3">
@@ -162,140 +195,12 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                             </div>
                         ))}
                      </div>
-                     <p className="text-[9px] text-gray-400 leading-tight pt-1">
-                         The Vector Engine has quantized the image to these colors. Change one to instantly update the SVG.
-                     </p>
-                </div>
-            )}
-
-            {/* INPAINTING TOOLS */}
-            {mode === AppMode.INPAINTING && (
-                <div className="p-5 bg-white/60 rounded-2xl border border-white shadow-soft space-y-5">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-xs font-bold text-morandi-dark uppercase tracking-wider">Mask Tools</h3>
-                        <span className="text-[10px] font-mono text-morandi-blue">{config.brushSize}px</span>
-                    </div>
-                    
-                    <input 
-                        type="range" 
-                        min="10" 
-                        max="100" 
-                        value={config.brushSize} 
-                        onChange={(e) => handleChange('brushSize', parseInt(e.target.value))}
-                        className="w-full h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-morandi-dark hover:accent-morandi-blue transition-all"
-                        onMouseEnter={() => setTooltip("Adjust Brush Diameter")}
-                        onMouseLeave={() => setTooltip(null)}
-                    />
-
-                    <div className="grid grid-cols-3 gap-2">
-                        {(['add', 'subtract', 'intersect'] as MaskBlendMode[]).map((blend) => (
-                            <button
-                                key={blend}
-                                onClick={() => handleChange('maskBlendMode', blend)}
-                                className={`py-2 rounded-lg text-[10px] font-semibold uppercase border transition-all ${
-                                    config.maskBlendMode === blend 
-                                    ? 'bg-morandi-blue text-white border-transparent shadow-md' 
-                                    : 'bg-transparent border-gray-200 text-gray-400 hover:border-gray-300'
-                                }`}
-                                onMouseEnter={() => setTooltip(
-                                    blend === 'add' ? "Draw to ADD to mask" : 
-                                    blend === 'subtract' ? "Draw to ERASE from mask" : 
-                                    "Draw to INTERSECT with mask"
-                                )}
-                                onMouseLeave={() => setTooltip(null)}
-                            >
-                                {blend}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 pt-2">
-                        <button 
-                            onClick={onClearMask} 
-                            className="glass-button py-2.5 rounded-xl text-xs text-red-500 font-medium"
-                            onMouseEnter={() => setTooltip("Remove entire mask")}
-                            onMouseLeave={() => setTooltip(null)}
-                        >
-                            Clear
-                        </button>
-                        <button 
-                            onClick={() => onExpand?.('all')} 
-                            className="glass-button py-2.5 rounded-xl text-xs text-morandi-dark font-medium flex items-center justify-center gap-2"
-                            onMouseEnter={() => setTooltip("Expand canvas 25% in all directions")}
-                            onMouseLeave={() => setTooltip(null)}
-                        >
-                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" /></svg>
-                             Outpaint
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* VECTOR TOOLS */}
-            {mode === AppMode.VECTORIZATION && (
-                <div className="p-5 bg-morandi-base/50 rounded-2xl border border-white/40 shadow-soft space-y-4">
-                     <h3 className="text-xs font-bold text-morandi-dark uppercase tracking-wider mb-2">Complexity</h3>
-                     <div className="flex bg-white/50 rounded-xl p-1 shadow-inner-light">
-                        {(['LOW', 'MEDIUM', 'HIGH'] as const).map((level) => (
-                             <button 
-                                key={level}
-                                onClick={() => handleChange('vectorDetail', level)}
-                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${
-                                    config.vectorDetail === level
-                                    ? 'bg-white text-morandi-dark shadow-sm'
-                                    : 'text-gray-400 hover:text-gray-600'
-                                }`}
-                                onMouseEnter={() => setTooltip(
-                                    level === 'LOW' ? "Minimalist/Iconic Shapes" : 
-                                    level === 'MEDIUM' ? "Standard Vectorization" : 
-                                    "High Detail & Texture Capture"
-                                )}
-                                onMouseLeave={() => setTooltip(null)}
-                             >
-                                 {level}
-                             </button>
-                        ))}
-                    </div>
-                    
-                    <div className="flex gap-3 pt-2">
-                         <button 
-                            onClick={() => handleChange('vectorColor', 'COLOR')} 
-                            className={`flex-1 py-2.5 rounded-xl text-xs font-medium border transition-all ${config.vectorColor === 'COLOR' ? 'bg-morandi-dark text-white border-transparent' : 'bg-transparent border-gray-300 text-gray-500'}`}
-                            onMouseEnter={() => setTooltip("Output full color SVG")}
-                            onMouseLeave={() => setTooltip(null)}
-                        >Color</button>
-                         <button 
-                            onClick={() => handleChange('vectorColor', 'BLACK_WHITE')} 
-                            className={`flex-1 py-2.5 rounded-xl text-xs font-medium border transition-all ${config.vectorColor === 'BLACK_WHITE' ? 'bg-morandi-dark text-white border-transparent' : 'bg-transparent border-gray-300 text-gray-500'}`}
-                            onMouseEnter={() => setTooltip("Output Black & White SVG")}
-                            onMouseLeave={() => setTooltip(null)}
-                        >B&W</button>
-                    </div>
                 </div>
             )}
 
             {/* RESTORATION - SOURCE TYPE */}
             {mode === AppMode.RESTORATION && (
                 <div className="space-y-4">
-                    <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Image Source</h3>
-                    <div className="flex bg-white/50 rounded-xl p-1 shadow-inner-light mb-4">
-                        {(Object.values(ImageType) as ImageType[]).map((type) => (
-                             <button 
-                                key={type}
-                                onClick={() => handleChange('imageType', type)}
-                                className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all ${
-                                    config.imageType === type
-                                    ? 'bg-white text-morandi-dark shadow-sm'
-                                    : 'text-gray-400 hover:text-gray-600'
-                                }`}
-                                onMouseEnter={() => setTooltip(type === ImageType.DOCUMENT ? "Optimized for Text/Lines" : type === ImageType.DIGITAL_ART ? "Clean Lines & Flat Color" : "Photorealistic Detail")}
-                                onMouseLeave={() => setTooltip(null)}
-                             >
-                                 {type === ImageType.DOCUMENT ? 'Doc' : type === ImageType.DIGITAL_ART ? 'Art' : 'Photo'}
-                             </button>
-                        ))}
-                    </div>
-                    
                     <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Enhancement</h3>
                      <div className="flex bg-white/50 rounded-xl p-1 shadow-inner-light">
                         {(['OFF', 'BALANCED', 'MAX'] as const).map((level) => (

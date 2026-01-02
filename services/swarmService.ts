@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { fileToGenerativePart } from "./geminiService";
+import { fileToGenerativePart, cleanRawJson } from "./geminiService";
 
 // --- CONFIGURATION ---
 const getClient = () => {
@@ -89,7 +89,7 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
         }
     });
 
-    const json = response.text || "{}";
+    const json = cleanRawJson(response.text || "{}");
     return JSON.parse(json) as ScoutResult;
 };
 
@@ -159,14 +159,15 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
         }
     });
 
-    const json = response.text || "{}";
+    const json = cleanRawJson(response.text || "{}");
     const rawResult = JSON.parse(json);
 
     // Hydrate the serialized verifiedData
     let cleanVerifiedData = {};
     try {
         if (typeof rawResult.verifiedData === 'string') {
-            cleanVerifiedData = JSON.parse(rawResult.verifiedData);
+            // Also clean this inner JSON string just in case
+            cleanVerifiedData = JSON.parse(cleanRawJson(rawResult.verifiedData));
         } else {
             cleanVerifiedData = rawResult.verifiedData || {};
         }

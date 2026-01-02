@@ -4,14 +4,14 @@ export enum AppMode {
   GENERATION = 'GENERATION',
   INPAINTING = 'INPAINTING',
   VECTORIZATION = 'VECTORIZATION',
-  EXTRACT_TEXT = 'EXTRACT_TEXT', // New Mode
+  EXTRACT_TEXT = 'EXTRACT_TEXT',
   ANALYSIS = 'ANALYSIS'
 }
 
 export enum ImageType {
   DOCUMENT = 'DOCUMENT',
   DIGITAL_ART = 'DIGITAL_ART',
-  PHOTO = 'PHOTO' // Fallback, though UI prioritizes others
+  PHOTO = 'PHOTO'
 }
 
 export enum AspectRatio {
@@ -31,24 +31,32 @@ export enum Resolution {
 }
 
 export enum ColorStyle {
-  TRUE_TONE = 'TRUE_TONE',       // Strict fidelity (Default)
-  HIGH_CONTRAST = 'HIGH_CONTRAST', // For docs/text clarity
-  VIBRANT_HDR = 'VIBRANT_HDR',   // For dull illustrations
-  BLACK_WHITE = 'BLACK_WHITE',   // Grayscale restoration
-  VINTAGE_WARM = 'VINTAGE_WARM', // Sepia/Retro preservation
-  COOL_TONE = 'COOL_TONE'        // Modern/Blue bias
+  TRUE_TONE = 'TRUE_TONE',
+  HIGH_CONTRAST = 'HIGH_CONTRAST',
+  VIBRANT_HDR = 'VIBRANT_HDR',
+  BLACK_WHITE = 'BLACK_WHITE',
+  VINTAGE_WARM = 'VINTAGE_WARM',
+  COOL_TONE = 'COOL_TONE'
 }
 
 export type MaskBlendMode = 'add' | 'subtract' | 'intersect';
 
+export interface PhysicsConfig {
+  enableDewarping: boolean; // DocTr: 3D Geometric Unwarping
+  enableIntrinsic: boolean; // PIDNet: Intrinsic Image Decomposition (Shadow Removal)
+  enableDiffVG: boolean;    // DiffVG: Differentiable Vector Graphics Optimization
+}
+
 export interface RestorationConfig {
   imageType: ImageType;
-  customPrompt: string; // For "Add a retro filter" style edits
+  customPrompt: string;
   resolution: Resolution;
-  aspectRatio: AspectRatio; // Only for generation or creative editing
-  colorStyle: ColorStyle; // New field
-  referenceImage?: string; // Data URL for Style Reference
-  detailEnhancement: 'OFF' | 'BALANCED' | 'MAX'; // New field for intelligent detail enhancement
+  aspectRatio: AspectRatio;
+  colorStyle: ColorStyle;
+  referenceImage?: string;
+  detailEnhancement: 'OFF' | 'BALANCED' | 'MAX';
+  // Physics Core
+  physics: PhysicsConfig;
   // Inpainting specific
   brushSize: number;
   maskBlendMode: MaskBlendMode;
@@ -61,18 +69,18 @@ export interface AnalysisResult {
   issues: string[];
   suggestedFixes: string[];
   rawAnalysis: string;
-  colorProfile?: string; // New field for color analysis
-  detectedType?: ImageType; // New field for auto-detection
-  detectedMaterial?: string; // New field for physical substrate detection (e.g., "Wove Paper", "Holographic")
-  requiresDescreening?: boolean; // Critical for scan restoration
-  description?: string; // Brief technical description
-  dominantColors?: string[]; // Array of Hex Codes for quantization
-  detectedWatermarks?: string[]; // New: List of words to be suppressed during restoration
+  colorProfile?: string;
+  detectedType?: ImageType;
+  detectedMaterial?: string;
+  requiresDescreening?: boolean;
+  description?: string;
+  dominantColors?: string[];
+  detectedWatermarks?: string[];
 }
 
 export interface ProcessingState {
   isProcessing: boolean;
-  stage: 'idle' | 'analyzing' | 'restoring' | 'generating' | 'inpainting' | 'vectorizing' | 'extracting_text' | 'complete' | 'error';
+  stage: 'idle' | 'analyzing' | 'dewarping' | 'intrinsic' | 'restoring' | 'generating' | 'inpainting' | 'vectorizing' | 'extracting_text' | 'complete' | 'error';
   error: string | null;
   progressMessage: string;
 }

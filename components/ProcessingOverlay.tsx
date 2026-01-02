@@ -5,6 +5,7 @@ interface ProcessingOverlayProps {
   mode: AppMode;
   isVisible: boolean;
   analysis?: AnalysisResult | null;
+  physicsLogs?: string[]; // Optional override from App state
 }
 
 const BASE_STEPS: Record<string, string[]> = {
@@ -44,7 +45,7 @@ const BASE_STEPS: Record<string, string[]> = {
   ]
 };
 
-const ProcessingOverlay: React.FC<ProcessingOverlayProps> = ({ mode, isVisible, analysis }) => {
+const ProcessingOverlay: React.FC<ProcessingOverlayProps> = ({ mode, isVisible, analysis, physicsLogs }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
 
@@ -53,7 +54,6 @@ const ProcessingOverlay: React.FC<ProcessingOverlayProps> = ({ mode, isVisible, 
      const steps = [...(BASE_STEPS[mode] || BASE_STEPS[AppMode.RESTORATION])];
      
      if (mode === AppMode.RESTORATION && analysis) {
-         // Insert smart steps based on actual analysis
          if (analysis.requiresDescreening) {
              steps.splice(2, 0, "⚠️ Halftone Detected: Engaging Descreening Matrix...");
          }
@@ -83,7 +83,7 @@ const ProcessingOverlay: React.FC<ProcessingOverlayProps> = ({ mode, isVisible, 
         if (prev < dynamicSteps.length - 1) {
           const next = prev + 1;
           setLogs(old => {
-              // Keep only last 4 logs to prevent overflow/clutter, typical terminal style
+              // Keep only last 4 logs
               const newLogs = [...old, dynamicSteps[next]];
               return newLogs.slice(-5);
           });
@@ -91,10 +91,17 @@ const ProcessingOverlay: React.FC<ProcessingOverlayProps> = ({ mode, isVisible, 
         }
         return prev;
       });
-    }, 1200); // Slightly faster updates for snappier feel
+    }, 1200);
 
     return () => clearInterval(interval);
   }, [isVisible, dynamicSteps]);
+
+  // Inject external physics logs if present (override internal loop)
+  useEffect(() => {
+      if (physicsLogs && physicsLogs.length > 0) {
+          setLogs(physicsLogs.slice(-5));
+      }
+  }, [physicsLogs]);
 
   if (!isVisible) return null;
 
