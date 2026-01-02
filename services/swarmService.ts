@@ -45,15 +45,15 @@ export interface AuditResult {
     mathCorrections: { original: string, corrected: string, note: string }[];
 }
 
-// --- MODULE A: THE SCOUT (Gemini 3 Flash) ---
-// Goal: Ultra-Low Latency Perception.
+// --- MODULE A: THE SCOUT (Gemini 3 Pro) ---
+// Goal: High-Fidelity Perception.
 export const scoutLayout = async (base64Image: string, mimeType: string): Promise<ScoutResult> => {
     const ai = getClient();
-    const model = "gemini-3-flash-preview"; 
+    const model = "gemini-3-pro-preview"; // Upgraded to Pro
     
     const prompt = `
-    ROLE: The Scout (Edge Perception Engine).
-    TASK: Analyze this document topology in <100ms.
+    ROLE: The Scout (High-Fidelity Perception Engine).
+    TASK: Analyze this document topology.
     
     1. Identify the Bounding Boxes (0-1000 scale) for: Header, Main Content, Footer.
     2. Detect Surface Damage: Are there tears, holes, coffee stains, or burns?
@@ -66,6 +66,8 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
         contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
         config: {
             responseMimeType: "application/json",
+            maxOutputTokens: 8192,
+            thinkingConfig: { thinkingBudget: 2048 },
             responseSchema: {
                 type: Type.OBJECT,
                 properties: {
@@ -130,6 +132,7 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
                 { codeExecution: {} }    // Verify Math/Logic
             ], 
             responseMimeType: "application/json",
+            maxOutputTokens: 32768, // Increased to accommodate high thinking
             thinkingConfig: { thinkingBudget: 16384 }, // EXTREME THOUGHT BUDGET (System 2)
             responseSchema: {
                 type: Type.OBJECT,
@@ -246,7 +249,7 @@ export const renderHighDefRaster = async (
 export const processDocumentWithSwarm = async (base64Image: string, mimeType: string, width: number, height: number, onLog: (msg: string) => void): Promise<string> => {
     
     // 1. SCOUT
-    onLog("🚀 Scout (Flash): Scanning Topology...");
+    onLog("🚀 Scout (Pro): Scanning Topology...");
     const scoutResult = await scoutLayout(base64Image, mimeType);
     console.log("Scout Data:", scoutResult);
 

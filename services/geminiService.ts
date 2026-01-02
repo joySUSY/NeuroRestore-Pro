@@ -357,7 +357,7 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
                 config: {
                     responseMimeType: "application/json",
                     maxOutputTokens: 8192,
-                    thinkingConfig: { thinkingBudget: 1024 }, 
+                    thinkingConfig: { thinkingBudget: 4096 }, // Increased for high intelligence
                     responseSchema: {
                         type: Type.OBJECT,
                         properties: {
@@ -584,7 +584,11 @@ export const vectorizeImage = async (
         const response = await ai.models.generateContent({
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: { temperature: 0.2, maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 2048 } }
+            config: { 
+                temperature: 0.2, 
+                maxOutputTokens: 32768, 
+                thinkingConfig: { thinkingBudget: 16384 } // High budget for complex SVG reasoning
+            }
         });
 
         let svgCode = response.text || "";
@@ -652,8 +656,8 @@ export const extractText = async (
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
                 responseMimeType: "application/json",
-                maxOutputTokens: 8192,
-                thinkingConfig: { thinkingBudget: 2048 }, // High budget for logic reasoning
+                maxOutputTokens: 16384,
+                thinkingConfig: { thinkingBudget: 8192 }, // High budget for logic reasoning
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
