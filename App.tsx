@@ -382,6 +382,7 @@ const App: React.FC = () => {
         onColorRemix={handleColorRemix}
         useSwarm={useSwarm}
         setUseSwarm={setUseSwarm}
+        onChangeKey={handleSelectKey}
       />
 
       <div className="flex-1 flex flex-col h-full relative z-0">
