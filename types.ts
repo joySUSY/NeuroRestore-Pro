@@ -41,46 +41,107 @@ export enum ColorStyle {
 
 export type MaskBlendMode = 'add' | 'subtract' | 'intersect';
 
+export type InkType = 'LASER' | 'INKJET' | 'BALLPOINT' | 'MARKER' | 'UNKNOWN';
+export type PaperType = 'PLAIN' | 'GLOSSY' | 'TEXTURED' | 'PARCHMENT' | 'UNKNOWN';
+
 export interface PhysicsConfig {
-  enableDewarping: boolean; // DocTr: 3D Geometric Unwarping
-  enableIntrinsic: boolean; // PIDNet: Intrinsic Image Decomposition (Shadow Removal)
-  enableDiffVG: boolean;    // DiffVG: Differentiable Vector Graphics Optimization
+  enableDewarping: boolean;
+  enableIntrinsic: boolean;
+  enableDiffVG: boolean;
+  enableMaterial: boolean;
+}
+
+// --- PDSR ARCHITECTURE TYPES ---
+
+export interface GlobalPhysics {
+  paperWhitePoint: string;       // Hex color of the substrate
+  noiseProfile: 'CLEAN' | 'GAUSSIAN' | 'SALT_PEPPER' | 'PAPER_GRAIN' | 'JPEG_ARTIFACTS';
+  blurKernel: 'NONE' | 'MOTION' | 'DEFOCUS' | 'LENS_SOFTNESS';
+  lightingCondition: 'FLAT' | 'UNEVEN' | 'GLARE' | 'LOW_LIGHT';
+}
+
+export interface AtlasRegion {
+  id: string;
+  bbox: [number, number, number, number]; // [ymin, xmin, ymax, xmax] 0-1000
+  content: string;
+  semanticType: 'TEXT_INK' | 'STAMP_PIGMENT' | 'SIGNATURE_INK' | 'PHOTO_HALFTONE' | 'BACKGROUND_STAIN';
+  textPrior?: string; // The "Ideal" text content
+  restorationStrategy: 'SHARPEN_EDGES' | 'PRESERVE_COLOR' | 'DENOISE_ONLY' | 'DESCREEN';
+  confidence: number;
+}
+
+export interface SemanticAtlas {
+  globalPhysics: GlobalPhysics;
+  regions: AtlasRegion[];
+  degradationScore: number;
+}
+
+// --- CONSISTENCY LOOP TYPES ---
+
+export interface ValidationResult {
+  regionId: string;
+  status: 'PASS' | 'FAIL';
+  reason: string;
+  confidence: number;
+}
+
+export interface ValidationReport {
+  isConsistent: boolean;
+  results: ValidationResult[];
+  globalCritique: string;
+}
+
+// --- APP STATE ---
+
+export interface PDSRConfig {
+    enableTextPriors: boolean;
+    enableTextureTransfer: boolean;
+    enableSemanticRepair: boolean;
 }
 
 export interface RestorationConfig {
   imageType: ImageType;
   customPrompt: string;
   resolution: Resolution;
-  aspectRatio: AspectRatio;
+  aspectRatio: AspectRatio | string;
   colorStyle: ColorStyle;
-  referenceImage?: string;
   detailEnhancement: 'OFF' | 'BALANCED' | 'MAX';
-  // Physics Core
-  physics: PhysicsConfig;
-  // Inpainting specific
   brushSize: number;
   maskBlendMode: MaskBlendMode;
-  // Vectorization specific
   vectorDetail: 'LOW' | 'MEDIUM' | 'HIGH';
-  vectorColor: 'COLOR' | 'BLACK_WHITE';
+  vectorColor: 'BLACK_WHITE' | 'COLOR';
+  pdsr: PDSRConfig;
+  physics: PhysicsConfig;
 }
 
 export interface AnalysisResult {
   issues: string[];
   suggestedFixes: string[];
   rawAnalysis: string;
-  colorProfile?: string;
-  detectedType?: ImageType;
-  detectedMaterial?: string;
-  requiresDescreening?: boolean;
-  description?: string;
-  dominantColors?: string[];
-  detectedWatermarks?: string[];
+  description: string;
+  detectedType: ImageType;
+  dominantColors: string[];
+  requiresDescreening: boolean;
+  detectedWatermarks: string[];
+  detectedInk?: InkType;
+  detectedPaper?: PaperType;
 }
 
 export interface ProcessingState {
   isProcessing: boolean;
-  stage: 'idle' | 'analyzing' | 'dewarping' | 'intrinsic' | 'restoring' | 'generating' | 'inpainting' | 'vectorizing' | 'extracting_text' | 'complete' | 'error';
+  stage: 'idle' | 'perception' | 'atlas_building' | 'restoring' | 'judging' | 'refining' | 'complete' | 'error';
   error: string | null;
   progressMessage: string;
+}
+
+export enum AgentStatus {
+  SUCCESS = 'SUCCESS',
+  ERROR = 'ERROR',
+  NO_OP = 'NO_OP'
+}
+
+export interface AgentResponse<T> {
+  status: AgentStatus;
+  data: T | null;
+  message: string;
 }

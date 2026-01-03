@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { AppMode, ImageType, Resolution, AspectRatio, RestorationConfig, MaskBlendMode, ColorStyle } from '../types';
 
@@ -9,16 +10,8 @@ interface ControlPanelProps {
   mode: AppMode;
   setMode: (mode: AppMode) => void;
   disabled?: boolean;
-  // Inpainting actions
   onExpand?: (direction: 'all') => void;
   onClearMask?: () => void;
-  // Palette actions
-  dominantColors?: string[];
-  onColorRemix?: (oldColor: string, newColor: string) => void;
-  // New Swarm Toggle
-  useSwarm?: boolean;
-  setUseSwarm?: (val: boolean) => void;
-  // Auth
   onChangeKey?: () => void;
 }
 
@@ -32,25 +25,19 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   disabled,
   onExpand,
   onClearMask,
-  dominantColors,
-  onColorRemix,
-  useSwarm,
-  setUseSwarm,
   onChangeKey
 }) => {
   
-  // --- Tooltip State ---
   const [tooltip, setTooltip] = useState<string | null>(null);
 
   const handleChange = (key: keyof RestorationConfig, value: any) => {
     setConfig(prev => ({ ...prev, [key]: value }));
   };
   
-  const handlePhysicsChange = (key: keyof RestorationConfig['physics'], value: boolean) => {
-      setConfig(prev => ({ ...prev, physics: { ...prev.physics, [key]: value } }));
+  const handlePDSRChange = (key: keyof RestorationConfig['pdsr'], value: boolean) => {
+      setConfig(prev => ({ ...prev, pdsr: { ...prev.pdsr, [key]: value } }));
   };
 
-  // Helper for Segmented Control
   const SegmentButton = ({ label, active, onClick, extraClass = "", tooltipText }: { label: string, active: boolean, onClick: () => void, extraClass?: string, tooltipText: string }) => (
     <button 
         onClick={onClick}
@@ -81,14 +68,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                 <h1 className="text-xl font-bold text-morandi-dark tracking-tight">
                 NeuroRestore
                 </h1>
-                <p className="text-[10px] text-gray-500 font-medium tracking-wide uppercase">AI Forensic Engine</p>
+                <p className="text-[10px] text-gray-500 font-medium tracking-wide uppercase">PDSR Engine</p>
             </div>
         </div>
         {onChangeKey && (
             <button 
                 onClick={onChangeKey}
                 className="p-2 rounded-full hover:bg-black/5 text-gray-400 hover:text-morandi-dark transition-colors"
-                title="API Key Settings"
             >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -100,174 +86,89 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
 
       <div className="space-y-8">
         
-        {/* Mode Selector - iOS Segmented Control */}
+        {/* Mode Selector */}
         <div className="p-1.5 bg-gray-100/50 rounded-xl flex flex-wrap gap-1 shadow-inner-light">
-            <SegmentButton label="Restore" active={mode === AppMode.RESTORATION} onClick={() => setMode(AppMode.RESTORATION)} tooltipText="Enhance, Upscale & De-noise Photos/Docs." />
+            <SegmentButton label="Restore (PDSR)" active={mode === AppMode.RESTORATION} onClick={() => setMode(AppMode.RESTORATION)} tooltipText="Perception-Driven Semantic Restoration." />
             <SegmentButton label="Edit" active={mode === AppMode.INPAINTING} onClick={() => setMode(AppMode.INPAINTING)} tooltipText="Smart Inpainting & Object Removal." />
-            <SegmentButton label="Vector" active={mode === AppMode.VECTORIZATION} onClick={() => setMode(AppMode.VECTORIZATION)} tooltipText="Convert Raster to Scalable SVG." />
-            <SegmentButton label="Text" active={mode === AppMode.EXTRACT_TEXT} onClick={() => setMode(AppMode.EXTRACT_TEXT)} tooltipText="Extract Text as Transparent Overlay." />
             <SegmentButton label="Create" active={mode === AppMode.GENERATION} onClick={() => setMode(AppMode.GENERATION)} extraClass="w-full mt-1" tooltipText="Generate new images from prompts." />
         </div>
 
-        {/* --- DYNAMIC CONTROLS --- */}
         <div className="space-y-6 animate-fade-in">
             
-            {/* SWARM INTELLIGENCE TOGGLE */}
-            {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && setUseSwarm && (
-                <div 
-                    onClick={() => setUseSwarm(!useSwarm)}
-                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between group ${useSwarm ? 'bg-indigo-900 border-indigo-500 shadow-lg' : 'bg-white border-gray-200'}`}
-                    onMouseEnter={() => setTooltip("Activate 3-Agent Swarm: Scout, Auditor, Restorer.")}
-                    onMouseLeave={() => setTooltip(null)}
-                >
-                    <div>
-                        <div className={`text-xs font-bold uppercase tracking-wider ${useSwarm ? 'text-indigo-200' : 'text-gray-500'}`}>
-                            Swarm Intelligence
-                        </div>
-                        <div className={`text-[10px] font-medium mt-1 ${useSwarm ? 'text-indigo-100' : 'text-gray-400'}`}>
-                            {useSwarm ? 'Active: Scout + Auditor + Restorer' : 'Standard Pipeline'}
-                        </div>
-                    </div>
-                    <div className={`w-10 h-6 rounded-full p-1 transition-colors relative ${useSwarm ? 'bg-indigo-500' : 'bg-gray-200'}`}>
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${useSwarm ? 'translate-x-4' : 'translate-x-0'}`} />
-                    </div>
-                </div>
-            )}
-
-            {/* PHYSICS CORE - NEW ADVANCED ALGORITHMS */}
-            {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION) && (
-                <div className="p-5 bg-orange-50/50 rounded-2xl border border-orange-100 shadow-soft space-y-4">
-                     <h3 className="text-xs font-bold text-orange-800 uppercase tracking-wider flex items-center gap-2">
-                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                         Physics Core
+            {/* PDSR CONTROLS */}
+            {(mode === AppMode.RESTORATION) && (
+                <div className="p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100 shadow-soft space-y-4">
+                     <h3 className="text-xs font-bold text-indigo-800 uppercase tracking-wider flex items-center gap-2">
+                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                         Perception Core
                      </h3>
                      
                      <div className="space-y-3">
-                         {/* DocTr Toggle */}
-                         <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-medium text-gray-600">3D Dewarping (DocTr)</span>
-                            <button 
-                                onClick={() => handlePhysicsChange('enableDewarping', !config.physics.enableDewarping)}
-                                className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableDewarping ? 'bg-orange-500' : 'bg-gray-200'}`}
-                            >
-                                <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableDewarping ? 'translate-x-4' : 'translate-x-0'}`} />
+                         <div 
+                            className="flex items-center justify-between cursor-pointer"
+                            onMouseEnter={() => setTooltip("Use recognized text content (OCR) to guide super-resolution sharpness.")}
+                            onMouseLeave={() => setTooltip(null)}
+                            onClick={() => handlePDSRChange('enableTextPriors', !config.pdsr.enableTextPriors)}
+                         >
+                            <span className="text-[10px] font-medium text-gray-600">Text-Prior Injection</span>
+                            <button className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.pdsr.enableTextPriors ? 'bg-indigo-500' : 'bg-gray-200'}`}>
+                                <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.pdsr.enableTextPriors ? 'translate-x-4' : 'translate-x-0'}`} />
                             </button>
                          </div>
 
-                         {/* Intrinsic Toggle (Restoration Only) */}
-                         {mode === AppMode.RESTORATION && (
-                             <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-medium text-gray-600">Intrinsic Albedo (PIDNet)</span>
-                                <button 
-                                    onClick={() => handlePhysicsChange('enableIntrinsic', !config.physics.enableIntrinsic)}
-                                    className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableIntrinsic ? 'bg-orange-500' : 'bg-gray-200'}`}
-                                >
-                                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableIntrinsic ? 'translate-x-4' : 'translate-x-0'}`} />
-                                </button>
-                             </div>
-                         )}
+                         <div 
+                            className="flex items-center justify-between cursor-pointer"
+                            onMouseEnter={() => setTooltip("Use clean background patches to synthesize authentic paper grain (NTT).")}
+                            onMouseLeave={() => setTooltip(null)}
+                            onClick={() => handlePDSRChange('enableTextureTransfer', !config.pdsr.enableTextureTransfer)}
+                         >
+                            <span className="text-[10px] font-medium text-gray-600">Neural Texture Transfer</span>
+                            <button className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.pdsr.enableTextureTransfer ? 'bg-indigo-500' : 'bg-gray-200'}`}>
+                                <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.pdsr.enableTextureTransfer ? 'translate-x-4' : 'translate-x-0'}`} />
+                            </button>
+                         </div>
 
-                         {/* DiffVG Toggle (Vector Only) */}
-                         {mode === AppMode.VECTORIZATION && (
-                             <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-medium text-gray-600">DiffVG Fitting (Opt)</span>
-                                <button 
-                                    onClick={() => handlePhysicsChange('enableDiffVG', !config.physics.enableDiffVG)}
-                                    className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.physics.enableDiffVG ? 'bg-orange-500' : 'bg-gray-200'}`}
-                                >
-                                    <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.physics.enableDiffVG ? 'translate-x-4' : 'translate-x-0'}`} />
-                                </button>
-                             </div>
-                         )}
+                         <div 
+                            className="flex items-center justify-between cursor-pointer"
+                            onMouseEnter={() => setTooltip("Identify and heal tears, stains, and creases using context.")}
+                            onMouseLeave={() => setTooltip(null)}
+                            onClick={() => handlePDSRChange('enableSemanticRepair', !config.pdsr.enableSemanticRepair)}
+                         >
+                            <span className="text-[10px] font-medium text-gray-600">Semantic Damage Repair</span>
+                            <button className={`w-8 h-4 rounded-full p-0.5 transition-colors ${config.pdsr.enableSemanticRepair ? 'bg-indigo-500' : 'bg-gray-200'}`}>
+                                <div className={`w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${config.pdsr.enableSemanticRepair ? 'translate-x-4' : 'translate-x-0'}`} />
+                            </button>
+                         </div>
                      </div>
-                </div>
-            )}
-
-            {/* LIVE PALETTE REMIXER (VECTOR MODE) */}
-            {mode === AppMode.VECTORIZATION && dominantColors && dominantColors.length > 0 && (
-                <div className="p-5 bg-white rounded-2xl border border-gray-200 shadow-soft space-y-3">
-                     <div className="flex items-center justify-between">
-                         <h3 className="text-xs font-bold text-morandi-dark uppercase tracking-wider flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                            Live Palette
-                         </h3>
-                         <span className="text-[9px] text-gray-400">Tap to Remix</span>
-                     </div>
-                     <div className="flex flex-wrap gap-2">
-                        {dominantColors.map((color, idx) => (
-                            <div key={`${color}-${idx}`} className="relative group">
-                                <label 
-                                    className="w-8 h-8 rounded-full shadow-sm border border-black/10 cursor-pointer block hover:scale-110 transition-transform"
-                                    style={{ backgroundColor: color }}
-                                    onMouseEnter={() => setTooltip(`Remix color ${color}`)}
-                                    onMouseLeave={() => setTooltip(null)}
-                                >
-                                    <input 
-                                        type="color" 
-                                        className="opacity-0 w-0 h-0 absolute"
-                                        value={color}
-                                        onChange={(e) => onColorRemix?.(color, e.target.value)}
-                                    />
-                                </label>
-                            </div>
-                        ))}
-                     </div>
-                </div>
-            )}
-
-            {/* RESTORATION - SOURCE TYPE */}
-            {mode === AppMode.RESTORATION && (
-                <div className="space-y-4">
-                    <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Enhancement</h3>
-                     <div className="flex bg-white/50 rounded-xl p-1 shadow-inner-light">
-                        {(['OFF', 'BALANCED', 'MAX'] as const).map((level) => (
-                             <button 
-                                key={level}
-                                onClick={() => handleChange('detailEnhancement', level)}
-                                className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${
-                                    config.detailEnhancement === level
-                                    ? 'bg-white text-morandi-dark shadow-sm'
-                                    : 'text-gray-400 hover:text-gray-600'
-                                }`}
-                                onMouseEnter={() => setTooltip(level === 'OFF' ? "No artificial sharpening" : level === 'BALANCED' ? "Smart edge recovery" : "Aggressive detail reconstruction")}
-                                onMouseLeave={() => setTooltip(null)}
-                             >
-                                 {level}
-                             </button>
-                        ))}
-                    </div>
                 </div>
             )}
 
             {/* GENERATION / EDITING COMMON CONFIG */}
-            {(mode === AppMode.GENERATION || mode === AppMode.RESTORATION || mode === AppMode.INPAINTING) && (
-                <div className="space-y-4">
-                     {/* Resolution */}
-                     <div className="flex justify-between items-center mb-1">
-                         <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Output Quality</h3>
-                     </div>
-                     <div className="grid grid-cols-3 gap-2">
-                        {Object.values(Resolution).map((res) => (
-                            <button
-                                key={res}
-                                onClick={() => handleChange('resolution', res)}
-                                className={`py-2 rounded-lg text-[10px] font-bold border transition-all ${
-                                    config.resolution === res
-                                    ? 'bg-white border-morandi-dark text-morandi-dark shadow-sm'
-                                    : 'bg-transparent border-gray-200 text-gray-400'
-                                }`}
-                            >
-                                {res}
-                            </button>
-                        ))}
-                     </div>
-                </div>
-            )}
+            <div className="space-y-4">
+                 <div className="flex justify-between items-center mb-1">
+                     <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Output Quality</h3>
+                 </div>
+                 <div className="grid grid-cols-3 gap-2">
+                    {Object.values(Resolution).map((res) => (
+                        <button
+                            key={res}
+                            onClick={() => handleChange('resolution', res)}
+                            className={`py-2 rounded-lg text-[10px] font-bold border transition-all ${
+                                config.resolution === res
+                                ? 'bg-white border-morandi-dark text-morandi-dark shadow-sm'
+                                : 'bg-transparent border-gray-200 text-gray-400'
+                            }`}
+                        >
+                            {res}
+                        </button>
+                    ))}
+                 </div>
+            </div>
             
             {/* Custom Prompt Input */}
             <div>
                  <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
-                    {mode === AppMode.GENERATION ? 'Creative Prompt' : 'Refinement Instruction'}
+                    {mode === AppMode.GENERATION ? 'Creative Prompt' : 'Specific Instructions'}
                  </h3>
                  <textarea 
                     value={config.customPrompt}
@@ -301,10 +202,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  ) : (
                      <>
                         <span>
-                            {mode === AppMode.RESTORATION ? (useSwarm ? 'Run Swarm Restore' : 'Enhance Image') : 
+                            {mode === AppMode.RESTORATION ? 'Execute PDSR' : 
                              mode === AppMode.INPAINTING ? 'Fill Selected Area' :
-                             mode === AppMode.VECTORIZATION ? (useSwarm ? 'Run Swarm Vector' : 'Vectorize') :
-                             mode === AppMode.EXTRACT_TEXT ? 'Extract Text' :
                              'Generate'}
                         </span>
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
@@ -312,7 +211,6 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
                  )}
              </button>
              
-             {/* Tooltip Footer */}
              <div className="mt-3 h-4 flex items-center justify-center">
                  {tooltip && (
                      <span className="text-[10px] text-morandi-blue font-medium animate-fade-in">{tooltip}</span>
