@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 interface ComparisonSliderProps {
@@ -58,6 +59,8 @@ const ComparisonSlider: React.FC<ComparisonSliderProps> = ({ originalImage, rest
 
   const handleTouchMove = useCallback((e: TouchEvent) => {
     if (!containerRef.current) return;
+    if (e.touches.length === 0) return; // Safety check
+
     const rect = containerRef.current.getBoundingClientRect();
     const touch = e.touches[0];
     const x = Math.max(0, Math.min(touch.clientX - rect.left, rect.width));

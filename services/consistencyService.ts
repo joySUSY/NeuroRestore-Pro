@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SemanticAtlas, ValidationReport, AgentResponse, AgentStatus } from "../types";
 import { cleanRawJson, executeSafe } from "./geminiService";
@@ -38,7 +39,7 @@ export const validateRestoration = async (
     atlas: SemanticAtlas
 ): Promise<AgentResponse<ValidationReport>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; 
+    const model = "gemini-3-pro-preview"; // LOGIC MODEL
 
     // Focus only on critical regions to save context window and focus attention
     const criticalRegions = atlas.regions.filter(r => 
@@ -51,18 +52,18 @@ export const validateRestoration = async (
 
     const prompt = `
     ACT AS A VISUAL QUALITY ASSURANCE (QA) CRITIC.
-    TASK: Compare the Original Image (Source) against the Restored Image (Candidate).
+    TASK: Perceptual Consistency Check (Source vs Restored).
     
     SEMANTIC TRUTH (ATLAS):
     Paper Type: ${atlas.globalPhysics.paperWhitePoint}
     Noise Profile: ${atlas.globalPhysics.noiseProfile}
     
-    REGION CHECKLIST:
+    REGION CHECKLIST (OCR Verification):
     ${checklist}
     
     CRITERIA FOR "FAIL":
-    1. **Hallucination**: The restored text spells something different than the Atlas content.
-    2. **Oversmoothing**: The paper texture looks like plastic (loss of high-frequency grain).
+    1. **OCR LOSS / Hallucination**: The restored text spells something different than the Atlas content prior.
+    2. **TEXTURE LOSS (Plasticity)**: If the background is perfectly smooth (digital white) instead of having the original grain, FAIL.
     3. **Artifacts**: New artifacts (checkerboard patterns, color bleeding) introduced.
     
     OUTPUT: A strict JSON report.
@@ -89,7 +90,8 @@ export const validateRestoration = async (
     };
 
     try {
-        // ATTEMPT 1: High Reasoning (Thinking)
+        // ATTEMPT 1: High Reasoning (Thinking Enabled)
+        // We use high budget to ensure the Judge is strict and observant.
         const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
             model,
             contents: { 
@@ -102,7 +104,7 @@ export const validateRestoration = async (
             config: {
                 responseMimeType: "application/json",
                 maxOutputTokens: 20000,
-                thinkingConfig: { thinkingBudget: 4096 }, // Reduced budget
+                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
                 responseSchema: schemaConfig
             }
         }), 1);

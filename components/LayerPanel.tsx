@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 
 interface LayerPanelProps {
@@ -113,54 +114,54 @@ const LayerPanel: React.FC<LayerPanelProps> = ({ svgDataUrl, onUpdateView, class
 
   return (
     <div className={`glass-panel rounded-2xl p-5 w-64 shadow-glass ${className}`}>
-        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+        <h3 className="text-[10px] font-bold text-morandi-overlay uppercase tracking-wider mb-4 flex items-center gap-2">
             Layers
         </h3>
 
         <div className="space-y-2 mb-6">
             {layers.map(layer => (
-                <div key={layer.id} className={`flex items-center justify-between p-3 rounded-xl transition-all ${layer.hasContent ? 'bg-white/50 border border-white' : 'bg-gray-50/50 opacity-40'}`}>
+                <div key={layer.id} className={`flex items-center justify-between p-3 rounded-xl transition-all ${layer.hasContent ? 'bg-white/50 border border-white' : 'bg-morandi-surface0/30 opacity-40'}`}>
                     <div className="flex items-center gap-3">
                         <button 
                             onClick={() => layer.hasContent && toggleLayer(layer.id)}
                             disabled={!layer.hasContent}
                             className={`w-4 h-4 rounded-md border flex items-center justify-center transition-colors focus:outline-none ${
                                 layer.isVisible 
-                                ? 'bg-morandi-dark border-morandi-dark text-white' 
-                                : 'bg-transparent border-gray-400'
+                                ? 'bg-morandi-text border-morandi-text text-white' 
+                                : 'bg-transparent border-morandi-overlay'
                             }`}
                         >
                             {layer.isVisible && <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>}
                         </button>
-                        <span className="text-xs font-semibold text-morandi-dark">{layer.name}</span>
+                        <span className="text-xs font-semibold text-morandi-text">{layer.name}</span>
                     </div>
                     {layer.hasContent && (
-                        <span className="text-[9px] bg-white text-gray-500 px-1.5 py-0.5 rounded-full border border-gray-100 font-medium">{layer.count}</span>
+                        <span className="text-[9px] bg-white text-morandi-overlay px-1.5 py-0.5 rounded-full border border-morandi-surface1 font-medium">{layer.count}</span>
                     )}
                 </div>
             ))}
         </div>
 
-        <div className="border-t border-gray-200/50 pt-4 space-y-2">
-            <h4 className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">Export Actions</h4>
+        <div className="border-t border-morandi-surface1 pt-4 space-y-2">
+            <h4 className="text-[9px] font-bold text-morandi-overlay uppercase tracking-widest mb-1">Export Actions</h4>
             <div className="grid grid-cols-2 gap-2">
                 <button 
                     onClick={() => handleDownload('TEXT_ONLY')}
                     disabled={!layers.find(l => l.id === 'layer_text')?.hasContent}
-                    className="flex items-center justify-center px-3 py-2 bg-white/70 hover:bg-white text-[10px] font-medium text-gray-600 rounded-lg transition-all border border-transparent hover:border-gray-200 disabled:opacity-50"
+                    className="flex items-center justify-center px-3 py-2 bg-white/70 hover:bg-white text-[10px] font-medium text-morandi-text rounded-lg transition-all border border-transparent hover:border-morandi-surface1 disabled:opacity-50"
                 >
                     Text Only
                 </button>
                 <button 
                     onClick={() => handleDownload('NO_BG')}
-                    className="flex items-center justify-center px-3 py-2 bg-white/70 hover:bg-white text-[10px] font-medium text-gray-600 rounded-lg transition-all border border-transparent hover:border-gray-200"
+                    className="flex items-center justify-center px-3 py-2 bg-white/70 hover:bg-white text-[10px] font-medium text-morandi-text rounded-lg transition-all border border-transparent hover:border-morandi-surface1"
                 >
                     No BG
                 </button>
             </div>
              <button 
                 onClick={() => handleDownload('MERGED')}
-                className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2.5 bg-morandi-blue/10 hover:bg-morandi-blue/20 text-xs text-morandi-dark font-semibold rounded-lg transition-colors border border-morandi-blue/20"
+                className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2.5 bg-morandi-blue/10 hover:bg-morandi-blue/20 text-xs text-morandi-text font-semibold rounded-lg transition-colors border border-morandi-blue/20"
             >
                 Download SVG
             </button>

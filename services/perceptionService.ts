@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, GlobalPhysics, AtlasRegion } from "../types";
 import { cleanRawJson } from "./geminiService";
@@ -15,13 +16,11 @@ const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 10
         return await operation();
     } catch (error: any) {
         const code = error.status || error.code;
-        // Retry on Server Errors (5xx) or Rate Limits (429)
         if ((code === 503 || code === 429) && retries > 0) {
             console.warn(`[PerceptionService] Error ${code}. Retrying in ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             return withRetry(operation, retries - 1, delay * 2);
         }
-        // If 500, it might be the model crashing on specific config (like Thinking), so we might want to fail fast to trigger fallback
         if (code === 500 && retries > 0) {
              console.warn(`[PerceptionService] Error 500 (Internal). Retrying once...`);
              await new Promise(resolve => setTimeout(resolve, delay));
@@ -32,7 +31,7 @@ const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 10
 };
 
 /**
- * MODULE A: COGNITIVE PERCEPTION ENGINE
+ * MODULE A: COGNITIVE PERCEPTION ENGINE (The "Brain")
  * Task: Build the Semantic Atlas.
  * "Read" the image physics and content before touching pixels.
  */
@@ -41,19 +40,20 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
     const model = "gemini-3-pro-preview"; 
 
     const prompt = `
-    ACT AS A COMPUTER VISION "BIONIC EYE".
-    TASK: Construct a Semantic Atlas of this image for restoration purposes.
+    ACT AS A COMPUTER VISION "DEGRADATION ASSESSMENT NETWORK" (DAN).
+    TASK: Construct a Semantic Atlas of this image for Physics-Based Restoration (PDSR).
     
-    1. **Global Physics Estimation**:
-       - Scan the "silent" areas (margins/background) to find the 'paperWhitePoint' (Hex color).
-       - Determine the 'noiseProfile' (Is it clean, grainy, or compressed?).
-       - Estimate the 'blurKernel' (Motion blur? Lens softness?).
+    <THINKING_PROCESS>
+    1. **Physics Analysis (The Substrate)**:
+       - Sample the paper margins. Determine the RGB "White Point" (e.g., #F0F0E0).
+       - Analyze grain. Is it coarse (ISO Noise) or smooth (Compression artifacts)?
+       - Estimate the Blur Kernel (Motion vs Defocus).
     
-    2. **Semantic Segmentation (Regions)**:
-       - Identify critical regions: Text Blocks, Stamps, Signatures, Photos, Stains.
-       - For Text: Extract the content (OCR) to serve as a "Text Prior".
-       - For Stains/Damage: Mark them as 'BACKGROUND_STAIN' for removal.
-       - For Stamps/Signatures: Mark them to 'PRESERVE_COLOR'.
+    2. **Semantic Segmentation & Priors**:
+       - Identify Text Regions. READ the text. This string is the "contentPrior".
+       - Identify Stains/Folds. Mark them as "BACKGROUND_STAIN".
+       - Identify Stamps/Signatures. Mark as "STAMP_PIGMENT".
+    </THINKING_PROCESS>
     
     OUTPUT: Strict JSON matching the SemanticAtlas structure.
     `;
@@ -91,23 +91,23 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
 
     try {
         // ATTEMPT 1: High Intelligence (Thinking Enabled)
-        // We use a lower thinking budget to avoid timeouts, but if it still 500s, we catch and fallback.
+        // Using 16k tokens - deep reasoning but safe from extreme timeouts
         const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
                 responseMimeType: "application/json",
-                maxOutputTokens: 20000,
-                thinkingConfig: { thinkingBudget: 4096 }, // Conservative thinking budget
+                maxOutputTokens: 20000, 
+                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
                 responseSchema: schemaConfig
             }
-        }), 1); // Retry once
+        }), 1); 
 
         const json = cleanRawJson(response.text || "{}");
         const atlas = JSON.parse(json) as SemanticAtlas;
         if (!atlas.globalPhysics) throw new Error("Invalid Atlas Structure");
 
-        return { status: AgentStatus.SUCCESS, data: atlas, message: "Semantic Atlas Built (Deep Mode)." };
+        return { status: AgentStatus.SUCCESS, data: atlas, message: "Semantic Atlas Built." };
 
     } catch (e: any) {
         console.warn("Perception (Deep Mode) failed. Falling back to Standard Mode.", e);
@@ -120,15 +120,14 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
                 config: {
                     responseMimeType: "application/json",
                     maxOutputTokens: 20000,
-                    // Disabled Thinking Config
+                    // Disabled Thinking Config for fallback robustness
                     responseSchema: schemaConfig
                 }
-            }), 2); // More retries for standard mode
+            }), 2);
 
             const json = cleanRawJson(response.text || "{}");
             const atlas = JSON.parse(json) as SemanticAtlas;
             
-            // Defaulting if parsing partially failed
             if (!atlas.globalPhysics) {
                 atlas.globalPhysics = { paperWhitePoint: '#FFFFFF', noiseProfile: 'CLEAN', blurKernel: 'NONE', lightingCondition: 'FLAT' };
             }

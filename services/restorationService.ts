@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, RestorationConfig, AspectRatio } from "../types";
 import { executeSafe } from "./geminiService";
@@ -39,7 +40,7 @@ const getClosestAspectRatio = (width: number, height: number): string => {
 };
 
 /**
- * MODULE B: FEATURE-INJECTION RESTORATION ENGINE
+ * MODULE B: FEATURE-INJECTION RESTORATION ENGINE (The "Hand")
  * Task: Execute PDSR (Perception-Driven Semantic Restoration).
  * Uses the Atlas to guide pixel hallucination.
  */
@@ -52,7 +53,7 @@ export const renderPDSR = async (
     config: RestorationConfig
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; 
+    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
 
     const targetAspectRatio = config.aspectRatio === AspectRatio.ORIGINAL 
         ? getClosestAspectRatio(width, height) 
@@ -102,23 +103,31 @@ export const renderPDSR = async (
         : "";
 
     const finalPrompt = `
-    ROLE: Perception-Driven Restoration Engine (PDSR).
+    ROLE: Perception-Driven Semantic Restoration Engine (PDSR).
     TASK: Perform Deep Restoration on this image using the provided Semantic Atlas.
     
-    INPUT CONTEXT:
+    INPUT CONTEXT (The Semantic Atlas):
     - Degradation Score: ${atlas.degradationScore}/100
     - Blur Kernel: ${atlas.globalPhysics.blurKernel}
+    
+    INSTRUCTIONS:
+    1. **TEXT-PRIOR GUIDANCE (Critical)**:
+       - Use the "contentPrior" strings to hallucinate the high-frequency details of characters.
+       - "See" the letters clearly because you "Know" what they are (Inverse Problem Solving).
+    
+    2. **PHYSICS CONSISTENCY**:
+       - Do not simply whiten the background. 
+       - Re-synthesize paper grain matching '${atlas.globalPhysics.noiseProfile}' to avoid plastic smoothing.
+    
+    3. **OUTPUT STANDARDS**:
+       - 4K High-Bitrate Resolution.
+       - Deep Clarity (Remove '${atlas.globalPhysics.blurKernel}' blur).
     
     RESTORATION PROTOCOLS:
     ${textPriors}
     ${colorAnchors}
     ${repairDirectives}
     ${texturePrompt}
-    
-    VISUAL OUTPUT STANDARDS:
-    1. **Deep Clarity**: Remove the detected '${atlas.globalPhysics.blurKernel}' blur.
-    2. **Material Truth**: The output must look like the original physical document, not a digital recreation.
-    3. **Resolution**: 4K High-Bitrate output.
     
     USER OVERRIDE: ${config.customPrompt}
     `;
@@ -159,33 +168,70 @@ export const renderPDSR = async (
 /**
  * SURGICAL REFINEMENT
  * Task: Correct a specific region that failed validation.
+ * Uses ADAPTIVE RE-PROMPTING based on the failure diagnosis.
  */
 export const refineRegion = async (
     regionBase64: string,
     failureReason: string,
-    semanticContext: string
+    semanticContext: string,
+    semanticType: string = 'TEXT_INK'
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; 
+    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+
+    // --- ADAPTIVE RE-PROMPTING STRATEGY ---
+    let strategy = "";
+    
+    const lowerReason = failureReason.toLowerCase();
+
+    if (lowerReason.includes("ocr") || lowerReason.includes("text") || lowerReason.includes("read")) {
+        // STRATEGY: Hallucination Correction
+        strategy = `
+        **FAILURE MODE:** OCR Mismatch / Illegible Text.
+        **CORRECTIVE ACTION:** STRICT_OCR_MATCH. 
+        - The pixel structure MUST form the string: "${semanticContext}".
+        - Sacrifice paper texture for absolute legibility. 
+        - Use High-Contrast Stroke generation.
+        `;
+    } else if (lowerReason.includes("texture") || lowerReason.includes("smooth") || lowerReason.includes("plastic")) {
+        // STRATEGY: Texture Injection
+        strategy = `
+        **FAILURE MODE:** Oversmoothing / Plasticity.
+        **CORRECTIVE ACTION:** NOISE_INJECTION.
+        - The region looks too digital. 
+        - Synthesize high-frequency Gaussian noise to match paper grain.
+        - Do not blur the edges.
+        `;
+    } else if (lowerReason.includes("artifact") || lowerReason.includes("stain")) {
+        // STRATEGY: Inpainting
+        strategy = `
+        **FAILURE MODE:** Artifact / Stain Detected.
+        **CORRECTIVE ACTION:** SEMANTIC_INPAINTING.
+        - Remove the obstruction.
+        - Fill with clean paper substrate color.
+        `;
+    } else {
+        // STRATEGY: General Enhancement
+        strategy = `
+        **FAILURE MODE:** General Quality Loss.
+        **CORRECTIVE ACTION:** SHARPEN & DENOISE.
+        - Enhance edge contrast.
+        `;
+    }
 
     const prompt = `
-    ROLE: Surgical Image Correction Agent.
-    TASK: Fix a specific artifact in this image patch.
+    ROLE: Surgical Image Correction Agent (Micro-Surgery).
+    TASK: Fix a specific artifact in this image patch using the strategy below.
     
     CONTEXT:
     This is a crop from a larger document.
-    Semantic Content: "${semanticContext}"
+    Semantic Content (Ground Truth): "${semanticContext}"
+    Region Type: ${semanticType}
     
-    FAILURE DIAGNOSIS:
-    "${failureReason}"
+    ${strategy}
     
     INSTRUCTION:
-    Re-generate this specific patch to resolve the failure.
-    - If "Hallucination": Force the text to read EXACTLY "${semanticContext}".
-    - If "Oversmoothing": Add noise/grain to match paper texture.
-    - Maintain seamless edges (do not change lighting at borders).
-    
-    OUTPUT: The corrected image patch.
+    Re-generate this patch. Ensure seamless boundaries.
     `;
 
     try {
@@ -194,7 +240,7 @@ export const refineRegion = async (
             contents: { parts: [{ inlineData: { mimeType: "image/png", data: regionBase64 } }, { text: prompt }] },
             config: {
                 imageConfig: { 
-                    imageSize: "1K", // Smaller resolution for patches
+                    imageSize: "1K", // Smaller resolution for patches is sufficient and faster
                     aspectRatio: "1:1"
                 }
             }

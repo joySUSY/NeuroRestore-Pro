@@ -15,24 +15,53 @@
           extend: {
             fontFamily: {
               sans: ['"Sofia Sans"', 'sans-serif'],
-              mono: ['"Sofia Sans"', 'monospace'], // Using Sofia Sans for everything for that modern iOS look
+              mono: ['"Sofia Sans"', 'monospace'], 
             },
             colors: {
+              // Custom Morandi Palette (User Specified)
               morandi: {
-                base: '#E8E6E1',      // Warm Off-White (Background)
-                dark: '#2C3036',      // Soft Charcoal (Text/Dark Mode)
-                blue: '#8FA2A6',      // Dusty Blue
-                green: '#7D8A82',     // Sage Green
-                clay: '#BFAFA6',      // Warm Clay
-                glass: 'rgba(255, 255, 255, 0.65)',
-                glassBorder: 'rgba(255, 255, 255, 0.4)',
-                active: '#4A5059',
+                base: '#F8F8F8',      // Background
+                
+                // Main Accents
+                blue: '#9297AB',      // Cool Blue-Grey (Primary)
+                yellow: '#E2D7B4',    // Soft Sand Yellow (Accents)
+                green: '#82ABA3',     // Sage Green (Primary)
+                
+                // Secondary Accents
+                mauve: '#D7CDD5',     // Dusty Lilac
+                surface0: '#EFF0EA',  // Cool Light Grey (User Requested #EFF0EA replacement for Lime-Beige)
+                peach: '#CCB9AA',     // Warm Taupe (Scrollbars/Borders)
+                
+                // UI Functional Colors (Derived for contrast)
+                text: '#545866',      // Dark Slate (Readable on F8F8F8)
+                subtext: '#858999',   // Lighter Grey
+                overlay: '#9297AB',   // Muted Taupe/Blue
+                surface1: '#EBECE0',  // Slightly darker surface
+                
+                mantle: '#F0F2E8',    
+                crust: '#E8EAD0',     
+                red: '#C47E7E',       // Muted Brick (Error state)
+                dark: '#41444F'       // Deep Contrast
+              },
+              // Insider Interface: Dracula (Dark) - Kept for High Contrast "Terminal" view
+              dracula: {
+                bg: '#282a36',
+                curr: '#44475a',
+                fg: '#f8f8f2',
+                comment: '#6272a4',
+                cyan: '#8be9fd',
+                green: '#50fa7b',
+                orange: '#ffb86c',
+                pink: '#ff79c6',
+                purple: '#bd93f9',
+                red: '#ff5555',
+                yellow: '#f1fa8c'
               }
             },
             boxShadow: {
-              'glass': '0 8px 32px 0 rgba(31, 38, 135, 0.07)',
-              'soft': '0 4px 20px rgba(0, 0, 0, 0.05)',
-              'inner-light': 'inset 0 1px 2px rgba(255, 255, 255, 0.8)',
+              'glass': '0 8px 32px 0 rgba(146, 151, 171, 0.15)', // Shadow tinted with #9297AB
+              'soft': '0 4px 20px rgba(130, 171, 163, 0.1)',     // Shadow tinted with #82ABA3
+              'inner-light': 'inset 0 1px 2px rgba(255, 255, 255, 0.9)',
             },
             animation: {
               'fade-in': 'fadeIn 0.5s ease-out',
@@ -54,31 +83,35 @@
     </script>
     <style>
       body {
-        /* Morandi Mesh Gradient Background */
-        background: radial-gradient(circle at 0% 0%, #E8E6E1 0%, #D4D8D9 100%);
-        color: #2C3036;
+        /* Morandi Background */
+        background-color: #F8F8F8;
+        /* Subtle radial gradient using the new secondary cool grey */
+        background-image: radial-gradient(circle at 10% 10%, #F8F8F8 0%, #EFF0EA 100%);
+        color: #545866; 
         -webkit-font-smoothing: antialiased;
       }
       
-      /* Glassmorphism Utilities */
+      /* Glassmorphism Utilities - Updated for Lighter Palette */
       .glass-panel {
-        background: rgba(255, 255, 255, 0.45);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid rgba(255, 255, 255, 0.6);
+        background: rgba(248, 248, 248, 0.65);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.8);
       }
 
       .glass-button {
         background: rgba(255, 255, 255, 0.5);
         backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.9);
         transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+        color: #545866;
       }
       
       .glass-button:hover {
-        background: rgba(255, 255, 255, 0.8);
+        background: rgba(255, 255, 255, 0.9);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 12px rgba(146, 151, 171, 0.2); /* #9297AB tint */
+        color: #9297AB; 
       }
 
       /* Custom scrollbar */
@@ -90,11 +123,11 @@
         background: transparent; 
       }
       ::-webkit-scrollbar-thumb {
-        background: #8FA2A6; 
+        background: #CCB9AA; /* Secondary 3 (Taupe) */
         border-radius: 10px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #7D8A82; 
+        background: #9297AB; /* Primary 1 (Blue) */
       }
     </style>
   <script type="importmap">

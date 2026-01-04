@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, InkType, PaperType } from "../types";
 
@@ -52,7 +53,7 @@ const getClosestAspectRatio = async (base64: string, mimeType: string): Promise<
  */
 export const geometricUnwarp = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview";
+    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
     const targetAspectRatio = await getClosestAspectRatio(base64Image, mimeType);
 
     const prompt = `
@@ -81,7 +82,8 @@ export const geometricUnwarp = async (base64Image: string, mimeType: string): Pr
                 imageConfig: { 
                     imageSize: "2K",
                     aspectRatio: targetAspectRatio as any
-                } 
+                }
+                // No Thinking
             }
         }));
         
@@ -100,7 +102,7 @@ export const geometricUnwarp = async (base64Image: string, mimeType: string): Pr
  */
 export const intrinsicDecomposition = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview";
+    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
     const targetAspectRatio = await getClosestAspectRatio(base64Image, mimeType);
 
     const prompt = `
@@ -130,6 +132,7 @@ export const intrinsicDecomposition = async (base64Image: string, mimeType: stri
                     imageSize: "2K",
                     aspectRatio: targetAspectRatio as any
                 }
+                // No Thinking
             }
         }));
 
@@ -253,7 +256,7 @@ export const refineVectorWithFeedback = async (
     heatmapBase64: string
 ): Promise<string> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; 
+    const model = "gemini-3-pro-preview"; // LOGIC MODEL
 
     const prompt = `
     ACT AS A DIFFERENTIABLE VECTOR GRAPHICS (DiffVG) OPTIMIZER.
@@ -288,7 +291,7 @@ export const refineVectorWithFeedback = async (
             config: { 
                 temperature: 0.1, // Low temp for precision
                 maxOutputTokens: 65536, 
-                thinkingConfig: { thinkingBudget: 32768 } // Max thinking budget
+                thinkingConfig: { thinkingBudget: 16384 } // High Intelligence
             }
         }));
 

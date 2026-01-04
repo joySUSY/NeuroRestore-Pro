@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { cleanRawJson } from "./geminiService";
 import { AgentResponse, AgentStatus } from "../types";
@@ -64,7 +65,7 @@ export interface AuditResult {
 // --- MODULE A: THE SCOUT (Gemini 3 Pro) ---
 export const scoutLayout = async (base64Image: string, mimeType: string): Promise<AgentResponse<ScoutResult>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; 
+    const model = "gemini-3-pro-preview"; // LOGIC MODEL
     
     const prompt = `
     ROLE: The Scout (High-Fidelity Perception Engine).
@@ -83,7 +84,7 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
             config: {
                 responseMimeType: "application/json",
                 maxOutputTokens: 65536,
-                thinkingConfig: { thinkingBudget: 32768 }, 
+                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -113,10 +114,10 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
     }
 };
 
-// --- MODULE B: THE AUDITOR (Gemini 3 Vision Pro) ---
+// --- MODULE B: THE AUDITOR (Gemini 3 Pro) ---
 export const auditAndExtract = async (base64Image: string, mimeType: string, scoutData: ScoutResult): Promise<AgentResponse<AuditResult>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; 
+    const model = "gemini-3-pro-preview"; // LOGIC MODEL
 
     // IDLE STATE CHECK: If Scout says it's just "ART", Auditor might skip
     if (scoutData.documentType === 'ART' || scoutData.documentType === 'PHOTO') {
@@ -151,7 +152,7 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
                 ], 
                 responseMimeType: "application/json",
                 maxOutputTokens: 65536, 
-                thinkingConfig: { thinkingBudget: 32768 }, 
+                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -212,7 +213,7 @@ export const renderHighDefRaster = async (
     auditData: AuditResult
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; 
+    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
 
     // 1. Determine Corrections from Auditor
     let correctionPrompt = "";
@@ -265,6 +266,7 @@ export const renderHighDefRaster = async (
                     imageSize: "4K",
                     aspectRatio: targetAspectRatio as any
                 }
+                // No Thinking
             }
         }));
 

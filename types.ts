@@ -132,6 +132,10 @@ export interface ProcessingState {
   stage: 'idle' | 'perception' | 'atlas_building' | 'restoring' | 'judging' | 'refining' | 'complete' | 'error';
   error: string | null;
   progressMessage: string;
+  // NEW: Visualization properties
+  progress: number; // 0 to 100
+  networkStatus?: 'IDLE' | 'UPLOADING' | 'WAITING' | 'RECEIVING';
+  latencyMs?: number;
 }
 
 export enum AgentStatus {
