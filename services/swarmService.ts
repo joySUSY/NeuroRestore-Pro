@@ -40,17 +40,20 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     ).val;
 };
 
-// --- MODULE A: THE SCOUT (Gemini 3 Pro) ---
+// --- MODULE A: THE SCOUT (Gemini 3 Pro Logic) ---
 export const scoutLayout = async (base64Image: string, mimeType: string): Promise<AgentResponse<ScoutResult>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL;
     
     const prompt = `
     ROLE: The Scout (High-Fidelity Perception Engine).
-    TASK: Analyze this document topology.
+    TASK: Analyze this document topology with Mathematical Precision.
     
-    1. Identify the Bounding Boxes (0-1000 scale) for: Header, Main Content, Footer.
-    2. Detect Surface Damage: Are there tears, holes, coffee stains, or burns?
+    THINKING PROCESS:
+    1. **Topology Mapping**: Identify the physical boundaries of Header, Content, and Footer. 
+       - Distinguish between "Ink Content" and "Paper Edge".
+    2. **Damage Detection**: Scan for tears, holes, coffee stains, burns, or creases.
+       - Return bounding boxes ONLY for physical damage, not for content.
     
     OUTPUT: Strict JSON.
     `;
@@ -92,7 +95,7 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
     }
 };
 
-// --- MODULE B: THE AUDITOR (Gemini 3 Pro) ---
+// --- MODULE B: THE AUDITOR (Gemini 3 Pro Logic + Tools) ---
 export const auditAndExtract = async (base64Image: string, mimeType: string, scoutData: ScoutResult): Promise<AgentResponse<AuditResult>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL;
@@ -112,9 +115,9 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
     
     TASK:
     1. **Data Extraction**: Extract all visible text from the document.
-    2. **Grounding & Truth Verification (Google Search)**: Check entities.
-    3. **Mathematical Verification (Code Execution)**: Check numbers.
-    4. **Watermark Detection**: List distinct words.
+    2. **Grounding & Truth Verification (Google Search)**: Check entities (Addresses, Company Names) against real-world data.
+    3. **Mathematical Verification (Code Execution)**: Check numbers. Sum line items. Verify totals.
+    4. **Watermark Detection**: List distinct words that act as background noise.
 
     OUTPUT: JSON Object.
     `;
@@ -182,7 +185,7 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
     }
 };
 
-// --- MODULE C: THE RESTORER (Gemini 3 Pro Image) ---
+// --- MODULE C: THE RESTORER (Gemini 3 Pro Vision) ---
 export const renderHighDefRaster = async (
     base64Image: string, 
     mimeType: string, 
@@ -211,7 +214,7 @@ export const renderHighDefRaster = async (
     `
         : "";
 
-    const dataSummary = JSON.stringify(auditData.verifiedData).slice(0, 2000); 
+    const dataSummary = JSON.stringify(auditData.verifiedData).slice(0, 4000); // Increased Context Window allows larger summary
 
     const targetAspectRatio = getClosestAspectRatio(width, height);
 
@@ -244,7 +247,7 @@ export const renderHighDefRaster = async (
                     imageSize: "4K",
                     aspectRatio: targetAspectRatio as any
                 }
-                // No Thinking
+                // Vision models do not support Thinking Config yet
             }
         }));
 

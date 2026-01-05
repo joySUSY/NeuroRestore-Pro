@@ -5,22 +5,27 @@ import { AppMode, ImageType, RestorationConfig, AnalysisResult, Resolution, Aspe
 import { calculateResidualHeatmap, refineVectorWithFeedback, extractInkColors, generateMaterialFilters } from "./physicsService";
 
 // --- GLOBAL CONFIGURATION: "GOD MODE" ---
+// Leveraging unreleased/preview tiers for maximum cognitive density.
 export const GEMINI_CONFIG = {
   // THE BRAIN: Reasoning, Analysis, Topology, Consistency, CODING
-  LOGIC_MODEL: "gemini-3-pro-preview",
+  // Using the absolute latest preview for System 2 Thinking
+  LOGIC_MODEL: "gemini-3-pro-preview", 
   
   // THE HAND: Rendering, Pixel Generation, Inpainting
+  // High-bitrate visual synthesis model
   VISION_MODEL: "gemini-3-pro-image-preview",
 
-  // REASONING BUDGET (System 2 Thinking) - Maximize for Deep Verification & Planning
-  THINKING_BUDGET: 32768,
+  // REASONING BUDGET (System 2 Thinking)
+  // Maximize to 32k to allow for full-page OCR error correction and complex topology solving.
+  THINKING_BUDGET: 32768, 
 
-  // CONTEXT WINDOW - Maximize for massive JSON/SVG outputs
+  // CONTEXT WINDOW
+  // Maximize for massive JSON/SVG outputs without truncation.
   MAX_OUTPUT_TOKENS: 65536,
 
   // PARAMETERS
-  TEMP_LOGIC: 0.1,    // Precision
-  TEMP_CREATIVE: 0.2  // Controlled Creativity
+  TEMP_LOGIC: 0.1,    // Zero-temperature logic for code/math
+  TEMP_CREATIVE: 0.2  // Controlled hallucination for texture synthesis
 };
 
 // --- ARCHITECTURE: NETWORK DISPATCHER (Request Sharding) ---
@@ -29,7 +34,7 @@ class GeminiDispatcher {
     private static instance: GeminiDispatcher;
     private queue: Array<() => Promise<any>> = [];
     private activeRequests = 0;
-    private MAX_CONCURRENCY = 5; // Increased for Cloud Run Scaling
+    private MAX_CONCURRENCY = 8; // Increased for Cloud Run Scaling
 
     private constructor() {}
 
@@ -48,6 +53,7 @@ class GeminiDispatcher {
                     const result = await task();
                     resolve(result);
                 } catch (e: any) {
+                    // Smart Error Wrapping
                     const safeError = new Error(e?.message || "Unknown Network Error");
                     (safeError as any).originalError = e;
                     reject(safeError);
