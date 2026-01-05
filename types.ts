@@ -76,6 +76,28 @@ export interface SemanticAtlas {
   degradationScore: number;
 }
 
+// --- SWARM INTELLIGENCE TYPES (NEW) ---
+
+export interface ScoutResult {
+    documentType: string;
+    regions: {
+        header: number[]; 
+        content: number[];
+        footer: number[];
+        damage_detected: boolean;
+        damage_bbox?: number[];
+    };
+    description: string;
+}
+
+export interface AuditResult {
+    verifiedData: any;
+    verificationLog: string[];
+    groundingMetadata?: any;
+    mathCorrections: { original: string, corrected: string, note: string }[];
+    watermarks?: string[]; 
+}
+
 // --- CONSISTENCY LOOP TYPES ---
 
 export interface ValidationResult {
@@ -129,10 +151,9 @@ export interface AnalysisResult {
 
 export interface ProcessingState {
   isProcessing: boolean;
-  stage: 'idle' | 'perception' | 'atlas_building' | 'restoring' | 'judging' | 'refining' | 'complete' | 'error';
+  stage: 'idle' | 'perception' | 'atlas_building' | 'scouting' | 'auditing' | 'restoring' | 'judging' | 'refining' | 'complete' | 'error';
   error: string | null;
   progressMessage: string;
-  // NEW: Visualization properties
   progress: number; // 0 to 100
   networkStatus?: 'IDLE' | 'UPLOADING' | 'WAITING' | 'RECEIVING';
   latencyMs?: number;

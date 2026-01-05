@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, GlobalPhysics, AtlasRegion } from "../types";
-import { cleanRawJson } from "./geminiService";
+import { cleanRawJson, GEMINI_CONFIG } from "./geminiService";
 
 // --- CONFIGURATION ---
 const getClient = () => {
@@ -37,7 +37,7 @@ const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 10
  */
 export const buildSemanticAtlas = async (base64Image: string, mimeType: string): Promise<AgentResponse<SemanticAtlas>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; 
+    const model = GEMINI_CONFIG.LOGIC_MODEL; 
 
     const prompt = `
     ACT AS A COMPUTER VISION "DEGRADATION ASSESSMENT NETWORK" (DAN).
@@ -45,6 +45,8 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
     
     <THINKING_PROCESS>
     1. **Physics Analysis (The Substrate)**:
+       - GEOMETRIC ANALYSIS: Detect page curl/warp vectors.
+       - MATERIAL ANALYSIS: Calculate Albedo (Paper White Point) vs Shading.
        - Sample the paper margins. Determine the RGB "White Point" (e.g., #F0F0E0).
        - Analyze grain. Is it coarse (ISO Noise) or smooth (Compression artifacts)?
        - Estimate the Blur Kernel (Motion vs Defocus).
@@ -91,14 +93,14 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
 
     try {
         // ATTEMPT 1: High Intelligence (Thinking Enabled)
-        // Using 16k tokens - deep reasoning but safe from extreme timeouts
+        // Using God Mode Budget
         const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
                 responseMimeType: "application/json",
-                maxOutputTokens: 20000, 
-                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                 responseSchema: schemaConfig
             }
         }), 1); 

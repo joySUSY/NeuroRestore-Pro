@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import ControlPanel from './components/ControlPanel';
 import ComparisonSlider from './components/ComparisonSlider';
@@ -9,6 +10,7 @@ import { generateNewImage, inpaintImage, fileToGenerativePart, vectorizeImage } 
 import { buildSemanticAtlas } from './services/perceptionService';
 import { renderPDSR, refineRegion } from './services/restorationService';
 import { validateRestoration } from './services/consistencyService';
+import { processDocumentWithSwarm } from './services/swarmService';
 import { AppMode, RestorationConfig, ImageType, Resolution, AspectRatio, ProcessingState, ColorStyle, AgentStatus, SemanticAtlas, ValidationReport } from './types';
 
 const App: React.FC = () => {
@@ -82,7 +84,9 @@ const App: React.FC = () => {
 
         switch(processing.stage) {
             case 'perception': target = 10; break;
-            case 'atlas_building': target = 35; break;
+            case 'atlas_building': target = 25; break;
+            case 'scouting': target = 35; break;
+            case 'auditing': target = 55; break;
             case 'restoring': target = 75; break;
             case 'judging': target = 90; break;
             case 'refining': target = 98; break;
@@ -343,8 +347,8 @@ const App: React.FC = () => {
         isProcessing: true, 
         stage: 'restoring', 
         error: null, 
-        progressMessage: 'Initializing Engine...',
-        progress: 40,
+        progressMessage: 'Initializing Swarm...',
+        progress: 10,
         networkStatus: 'WAITING',
         latencyMs: 30
     });
@@ -361,21 +365,30 @@ const App: React.FC = () => {
           if (!currentBase64) throw new Error("No image data.");
           if (!semanticAtlas) throw new Error("Semantic Atlas not ready.");
 
-          // --- PHASE 2: RESTORATION ---
-          updateLog("👁️ PDSR Engine: Injecting Text Priors...");
-          updateLog("🎨 Neural Texture Transfer Active...");
+          // --- SWARM PROTOCOL ACTIVATION ---
+          updateLog("🐝 Activating Swarm Intelligence Protocol...");
+          setProcessing(prev => ({ ...prev, stage: 'scouting', progressMessage: 'Deploying Scout Agents...' }));
           
-          const res = await renderPDSR(currentBase64, mimeType, imgDims.width, imgDims.height, semanticAtlas, config);
-          
-          if (res.status !== AgentStatus.SUCCESS || !res.data) {
-              throw new Error(res.message);
+          // The Swarm Service handles Scout, Auditor, and Restorer
+          const swarmRes = await processDocumentWithSwarm(
+              currentBase64,
+              mimeType,
+              imgDims.width,
+              imgDims.height,
+              (msg) => updateLog(msg),
+              () => cancelRef.current
+          );
+
+          if (swarmRes.status !== AgentStatus.SUCCESS || !swarmRes.data) {
+              throw new Error(swarmRes.message);
           }
-          let restoredBase64 = res.data.split(',')[1];
-          resultUrl = res.data;
+
+          let restoredBase64 = swarmRes.data.split(',')[1];
+          resultUrl = swarmRes.data;
           
           if (cancelRef.current) return;
 
-          // --- PHASE 3: THE JUDGE (Consistency Check) ---
+          // --- PHASE 4: THE JUDGE (Consistency Check) ---
           setProcessing(prev => ({ ...prev, stage: 'judging', progressMessage: 'Validating Semantic Consistency...' }));
           updateLog("⚖️ The Judge: Comparing Semantic Truth...");
           
@@ -388,7 +401,7 @@ const App: React.FC = () => {
                    const failures = validationRes.data.results.filter(r => r.status === 'FAIL');
                    updateLog(`⚠️ Validation Warning: ${failures.length} regions inconsistent.`);
                    
-                   // --- PHASE 4: SURGICAL REFINEMENT ---
+                   // --- PHASE 5: SURGICAL REFINEMENT ---
                    if (failures.length > 0) {
                         setProcessing(prev => ({ ...prev, stage: 'refining', progressMessage: 'Performing Surgical Refinement...' }));
                         updateLog("💉 Surgical Loop: Correcting Hallucinations...");

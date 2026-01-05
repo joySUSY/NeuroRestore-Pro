@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { cleanRawJson } from "./geminiService";
-import { AgentResponse, AgentStatus } from "../types";
+import { cleanRawJson, GEMINI_CONFIG } from "./geminiService";
+import { AgentResponse, AgentStatus, ScoutResult, AuditResult } from "../types";
 
 // --- CONFIGURATION ---
 const getClient = () => {
@@ -40,32 +40,10 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     ).val;
 };
 
-// --- TYPES ---
-
-export interface ScoutResult {
-    documentType: string;
-    regions: {
-        header: number[]; 
-        content: number[];
-        footer: number[];
-        damage_detected: boolean;
-        damage_bbox?: number[];
-    };
-    description: string;
-}
-
-export interface AuditResult {
-    verifiedData: any;
-    verificationLog: string[];
-    groundingMetadata?: any;
-    mathCorrections: { original: string, corrected: string, note: string }[];
-    watermarks?: string[]; 
-}
-
 // --- MODULE A: THE SCOUT (Gemini 3 Pro) ---
 export const scoutLayout = async (base64Image: string, mimeType: string): Promise<AgentResponse<ScoutResult>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
     
     const prompt = `
     ROLE: The Scout (High-Fidelity Perception Engine).
@@ -83,8 +61,8 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
                 responseMimeType: "application/json",
-                maxOutputTokens: 65536,
-                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -117,7 +95,7 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
 // --- MODULE B: THE AUDITOR (Gemini 3 Pro) ---
 export const auditAndExtract = async (base64Image: string, mimeType: string, scoutData: ScoutResult): Promise<AgentResponse<AuditResult>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
 
     // IDLE STATE CHECK: If Scout says it's just "ART", Auditor might skip
     if (scoutData.documentType === 'ART' || scoutData.documentType === 'PHOTO') {
@@ -151,8 +129,8 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
                     { codeExecution: {} }
                 ], 
                 responseMimeType: "application/json",
-                maxOutputTokens: 65536, 
-                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -213,7 +191,7 @@ export const renderHighDefRaster = async (
     auditData: AuditResult
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+    const model = GEMINI_CONFIG.VISION_MODEL;
 
     // 1. Determine Corrections from Auditor
     let correctionPrompt = "";

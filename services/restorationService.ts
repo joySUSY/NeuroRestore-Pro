@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, RestorationConfig, AspectRatio } from "../types";
-import { executeSafe } from "./geminiService";
+import { executeSafe, GEMINI_CONFIG } from "./geminiService";
 
 // --- CONFIGURATION ---
 const getClient = () => {
@@ -53,7 +53,7 @@ export const renderPDSR = async (
     config: RestorationConfig
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+    const model = GEMINI_CONFIG.VISION_MODEL;
 
     const targetAspectRatio = config.aspectRatio === AspectRatio.ORIGINAL 
         ? getClosestAspectRatio(width, height) 
@@ -67,7 +67,7 @@ export const renderPDSR = async (
     let textPriors = "";
     if (config.pdsr.enableTextPriors && textRegions.length > 0) {
         textPriors = `
-        *** TEXT-PRIOR GUIDANCE (TPSR) ***
+        *** TEXT-PRIOR GUIDED SUPER-RESOLUTION (TPGSR) ***
         Inject the following semantic content into the super-resolution features.
         Ensure these strings are rendered with vector-sharp edges:
         ${textRegions.slice(0, 15).map(r => `- "${r.content}" (Strategy: ${r.restorationStrategy})`).join('\n')}
@@ -99,7 +99,7 @@ export const renderPDSR = async (
            - Substrate Color: ${atlas.globalPhysics.paperWhitePoint}
            - Noise Profile: ${atlas.globalPhysics.noiseProfile}
            INSTRUCTION: Synthesize high-frequency details that match this specific paper grain. 
-           Reject synthetic "plastic" smoothing. Maintain the material fidelity.`
+           Reject synthetic "plastic" smoothing. Maintain the material fidelity ("Noble Noise").`
         : "";
 
     const finalPrompt = `
@@ -177,7 +177,7 @@ export const refineRegion = async (
     semanticType: string = 'TEXT_INK'
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+    const model = GEMINI_CONFIG.VISION_MODEL;
 
     // --- ADAPTIVE RE-PROMPTING STRATEGY ---
     let strategy = "";

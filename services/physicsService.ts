@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, InkType, PaperType } from "../types";
+import { GEMINI_CONFIG } from "./geminiService";
 
 const getClient = () => {
     const apiKey = process.env.API_KEY;
@@ -24,54 +25,37 @@ const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 10
     }
 };
 
-// DUPLICATED Helper (Dependency-free): Get Aspect Ratio
-const getClosestAspectRatio = async (base64: string, mimeType: string): Promise<string> => {
-    return new Promise((resolve) => {
-        if (typeof window === 'undefined') { resolve("1:1"); return; }
-        const img = new Image();
-        img.onload = () => {
-            const ratio = img.width / img.height;
-            const supported = [
-                { val: "1:1", ratio: 1.0 }, { val: "3:4", ratio: 0.75 }, { val: "4:3", ratio: 1.333 }, 
-                { val: "9:16", ratio: 0.5625 }, { val: "16:9", ratio: 1.7778 },
-                { val: "2:3", ratio: 0.666 }, { val: "3:2", ratio: 1.5 },
-                { val: "4:5", ratio: 0.8 }, { val: "5:4", ratio: 1.25 },
-                { val: "21:9", ratio: 2.333 }
-            ];
-            const closest = supported.reduce((prev, curr) => 
-                Math.abs(curr.ratio - ratio) < Math.abs(prev.ratio - ratio) ? curr : prev
-            );
-            resolve(closest.val);
-        };
-        img.onerror = () => resolve("1:1");
-        img.src = `data:${mimeType};base64,${base64}`;
-    });
-};
-
 /**
- * ALGORITHM 1: 3D GEOMETRIC DEWARPING (DocTr Simulation)
+ * ALGORITHM 1: DETERMINISTIC GEOMETRIC DEWARPING (Neuro-Symbolic)
+ * Strategy: "Don't Draw. Calculate."
+ * 1. AI writes Python Code to find contours (cv2).
+ * 2. AI executes Code to get Perspective Transform Matrix.
+ * 3. AI warps the image mathematically.
  */
 export const geometricUnwarp = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
-    const targetAspectRatio = await getClosestAspectRatio(base64Image, mimeType);
+    // Use LOGIC model for coding, it is smarter at python than Vision model
+    const model = GEMINI_CONFIG.LOGIC_MODEL; 
 
     const prompt = `
-    ACT AS A GEOMETRIC RECTIFICATION ENGINE (DocTr).
+    ACT AS A COMPUTER VISION ENGINEER (OpenCV Expert).
+    TASK: Write and Execute Python code to perform 4-Point Perspective Transform (Dewarping).
     
-    INPUT: A distorted, warped, or curled document image.
-    TASK: Perform 3D Mesh Unrolling to flatten the document into a perfect 2D plane.
+    ALGORITHM:
+    1. Load the input image.
+    2. Convert to Grayscale -> GaussianBlur(5x5) -> Canny Edge Detection.
+    3. Find Contours (cv2.RETR_LIST). Sort by area. Take the largest one.
+    4. Approximate the contour to a polygon (approxPolyDP).
+    5. IF the polygon has 4 points:
+       - Order points: top-left, top-right, bottom-right, bottom-left.
+       - Calculate new width/height (max euclidean distance).
+       - Construct destination points array (0,0) to (w,h).
+       - Apply 'cv2.getPerspectiveTransform' and 'cv2.warpPerspective'.
+    6. ELSE (if no clear document found):
+       - Return the original image unmodified.
     
-    ALGORITHMIC STEPS:
-    1. **Mesh Prediction:** Estimate the 3D surface flow of the paper. Detect Z-axis curvature.
-    2. **Unrolling:** Mathematically "unroll" the mesh to flatten page curls.
-    3. **Perspective Correction:** Rectify the camera angle to a top-down orthogonal view (Flatbed Scanner View).
-    4. **Resampling:** Map original pixels to the new rectified coordinates.
-
-    CONSTRAINTS:
-    - DO NOT change the content, text, or font.
-    - DO NOT perform color correction yet.
-    - OUTPUT: The raw, flattened image data.
+    INPUT: An image file is available in the context.
+    OUTPUT: Display the processed image result.
     `;
 
     try {
@@ -79,48 +63,99 @@ export const geometricUnwarp = async (base64Image: string, mimeType: string): Pr
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
-                imageConfig: { 
-                    imageSize: "2K",
-                    aspectRatio: targetAspectRatio as any
-                }
-                // No Thinking
+                tools: [{ codeExecution: {} }], // ENABLE SANDBOX
+                responseMimeType: "application/json", 
+                // We don't use responseSchema here because code execution returns complex artifacts
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // Plan the code before writing
             }
         }));
         
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Dewarping Complete" };
+        // Scan for Image Artifacts in the Execution Result
+        // The structure usually is: candidates[0].content.parts[] -> one part contains executableCode, next contains codeExecutionResult
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+            // Check output of code execution
+            if (part.executableCode) continue; // This is the script itself
+            
+            // Check for the RESULT of execution
+            if (part.codeExecutionResult) {
+                // The output might be text (stdout) or an image
+                // But often Gemini puts the *resulting image* into a separate part of the content with inlineData
+                // Let's check the *entire* response parts for any generated images
+            }
+
+            // Direct check for generated images in the response parts
+            if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+                 return { 
+                     status: AgentStatus.SUCCESS, 
+                     data: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`, 
+                     message: "Geometric Dewarping (Calculated)" 
+                 };
+            }
         }
-        return { status: AgentStatus.NO_OP, data: `data:${mimeType};base64,${base64Image}`, message: "Dewarping skipped (No change)" };
+
+        // Fallback: If code ran but didn't return an image (e.g., printed "No contour found")
+        console.warn("Dewarping: Code executed but returned no image. Assuming no changes needed.");
+        return { status: AgentStatus.NO_OP, data: `data:${mimeType};base64,${base64Image}`, message: "Dewarping: No bounds detected" };
+
     } catch (e: any) {
-        console.warn(`Dewarping failed [${e.status || e.code || 'Unknown'}], proceeding with original.`, e);
-        return { status: AgentStatus.ERROR, data: `data:${mimeType};base64,${base64Image}`, message: "Dewarping Failed" };
+        console.warn(`Dewarping Code Execution Failed [${e.message}], falling back to Neural Simulation.`, e);
+        // FALLBACK TO NEURAL SIMULATION (Old Method) if Sandbox fails
+        return geometricUnwarpNeural(base64Image, mimeType);
     }
 };
 
 /**
- * ALGORITHM 2: INTRINSIC IMAGE DECOMPOSITION (PIDNet Simulation)
+ * FALLBACK: NEURAL DEWARPING (Visual Approximation)
+ * Used only if Python Sandbox fails.
+ */
+const geometricUnwarpNeural = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
+    const ai = getClient();
+    const model = GEMINI_CONFIG.VISION_MODEL; 
+    const prompt = `Fix perspective. Flatten this document to a top-down view. Keep resolution high.`;
+    
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
+            config: { imageConfig: { imageSize: "2K", aspectRatio: "1:1" } }
+        });
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Dewarping (Neural Fallback)" };
+        }
+    } catch (e) { /* ignore */ }
+    return { status: AgentStatus.ERROR, data: null, message: "Dewarping Failed" };
+};
+
+/**
+ * ALGORITHM 2: INTRINSIC DECOMPOSITION (Division Normalization)
+ * Strategy: Estimate background via Morphological Closing and divide.
+ * I = R * L  =>  R = I / L
  */
 export const intrinsicDecomposition = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
-    const targetAspectRatio = await getClosestAspectRatio(base64Image, mimeType);
+    const model = GEMINI_CONFIG.LOGIC_MODEL; 
 
     const prompt = `
-    ACT AS A PHYSICS-BASED RENDERING ENGINE.
-    TASK: Perform Intrinsic Image Decomposition.
+    ACT AS A PHYSICS ENGINE.
+    TASK: Perform Intrinsic Image Decomposition (Shadow Removal) using Python OpenCV.
     
     THEORY:
-    Image (I) = Reflectance (R) * Shading (S).
+    We assume the image I = Reflectance (R) * Illumination (L).
+    We want to recover R.
     
-    INSTRUCTION:
-    1. **Decompose** the input image into Reflectance (Albedo) and Shading maps.
-    2. **Discard** the Shading map (S). This removes all shadows, uneven lighting, scanner glare, and paper crease shadows.
-    3. **Output** ONLY the Reflectance map (R).
+    ALGORITHM:
+    1. Load image. Convert to Grayscale.
+    2. Estimate Illumination (L):
+       - Use 'cv2.dilate' with a large kernel (e.g., 50x50) to remove text features.
+       - Use 'cv2.medianBlur' to smooth the illumination map.
+    3. Recover Reflectance (R):
+       - R = I / L (Division Normalization).
+       - Note: Use float32 for division to avoid clipping, then scale back to 0-255.
+    4. Normalize Contrast (CLAHE or MinMax).
     
-    VISUAL GOAL:
-    - The output should look like the raw material color (Flat Albedo).
-    - Text should be pure ink color (e.g. #000000) on pure paper color (e.g. #FFFFFF).
-    - No lighting gradients. No shadows.
+    INPUT: Image provided.
+    OUTPUT: Display the flattened (albedo) image.
     `;
 
     try {
@@ -128,22 +163,50 @@ export const intrinsicDecomposition = async (base64Image: string, mimeType: stri
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: {
-                imageConfig: { 
-                    imageSize: "2K",
-                    aspectRatio: targetAspectRatio as any
-                }
-                // No Thinking
+                tools: [{ codeExecution: {} }], // ENABLE SANDBOX
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }
             }
         }));
 
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Intrinsic Decomp Complete" };
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+            if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+                 return { 
+                     status: AgentStatus.SUCCESS, 
+                     data: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`, 
+                     message: "Lighting Correction (Calculated)" 
+                 };
+            }
         }
-        return { status: AgentStatus.NO_OP, data: `data:${mimeType};base64,${base64Image}`, message: "Decomposition skipped" };
+        
+        console.warn("Lighting: Code executed but returned no image.");
+        return { status: AgentStatus.NO_OP, data: `data:${mimeType};base64,${base64Image}`, message: "Lighting: No changes" };
+
     } catch (e: any) {
-        console.warn(`Intrinsic decomposition failed [${e.status || e.code || 'Unknown'}], proceeding with original.`, e);
-        return { status: AgentStatus.ERROR, data: `data:${mimeType};base64,${base64Image}`, message: "Decomposition Failed" };
+        console.warn(`Lighting Code Execution Failed, falling back to Neural Simulation.`, e);
+        return intrinsicDecompositionNeural(base64Image, mimeType);
     }
+};
+
+/**
+ * FALLBACK: NEURAL DECOMPOSITION
+ */
+const intrinsicDecompositionNeural = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
+    const ai = getClient();
+    const model = GEMINI_CONFIG.VISION_MODEL; 
+    const prompt = `Remove shadows. Output only the flat text/paper color (Albedo). High fidelity.`;
+    
+    try {
+        const response = await ai.models.generateContent({
+            model,
+            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
+            config: { imageConfig: { imageSize: "2K", aspectRatio: "1:1" } }
+        });
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Lighting (Neural Fallback)" };
+        }
+    } catch (e) { /* ignore */ }
+    return { status: AgentStatus.ERROR, data: null, message: "Lighting Failed" };
 };
 
 // ... existing helpers ...
@@ -256,7 +319,7 @@ export const refineVectorWithFeedback = async (
     heatmapBase64: string
 ): Promise<string> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL; // High Reasoning Model
 
     const prompt = `
     ACT AS A DIFFERENTIABLE VECTOR GRAPHICS (DiffVG) OPTIMIZER.
@@ -289,9 +352,9 @@ export const refineVectorWithFeedback = async (
                 ] 
             },
             config: { 
-                temperature: 0.1, // Low temp for precision
-                maxOutputTokens: 65536, 
-                thinkingConfig: { thinkingBudget: 16384 } // High Intelligence
+                temperature: GEMINI_CONFIG.TEMP_LOGIC, // Low temp for precision
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // High Intelligence
             }
         }));
 

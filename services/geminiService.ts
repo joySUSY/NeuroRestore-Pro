@@ -4,13 +4,32 @@ import ColorThief from "colorthief";
 import { AppMode, ImageType, RestorationConfig, AnalysisResult, Resolution, AspectRatio, ColorStyle, PhysicsConfig, AgentResponse, AgentStatus, InkType, PaperType } from "../types";
 import { calculateResidualHeatmap, refineVectorWithFeedback, extractInkColors, generateMaterialFilters } from "./physicsService";
 
+// --- GLOBAL CONFIGURATION: "GOD MODE" ---
+export const GEMINI_CONFIG = {
+  // THE BRAIN: Reasoning, Analysis, Topology, Consistency, CODING
+  LOGIC_MODEL: "gemini-3-pro-preview",
+  
+  // THE HAND: Rendering, Pixel Generation, Inpainting
+  VISION_MODEL: "gemini-3-pro-image-preview",
+
+  // REASONING BUDGET (System 2 Thinking) - Maximize for Deep Verification & Planning
+  THINKING_BUDGET: 32768,
+
+  // CONTEXT WINDOW - Maximize for massive JSON/SVG outputs
+  MAX_OUTPUT_TOKENS: 65536,
+
+  // PARAMETERS
+  TEMP_LOGIC: 0.1,    // Precision
+  TEMP_CREATIVE: 0.2  // Controlled Creativity
+};
+
 // --- ARCHITECTURE: NETWORK DISPATCHER (Request Sharding) ---
 
 class GeminiDispatcher {
     private static instance: GeminiDispatcher;
     private queue: Array<() => Promise<any>> = [];
     private activeRequests = 0;
-    private MAX_CONCURRENCY = 3; 
+    private MAX_CONCURRENCY = 5; // Increased for Cloud Run Scaling
 
     private constructor() {}
 
@@ -285,7 +304,7 @@ const getDominantColors = async (base64: string, mimeType: string): Promise<stri
     });
 };
 
-const getClient = () => {
+export const getClient = () => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) throw new Error("API Key is missing in environment variables.");
     return new GoogleGenAI({ apiKey });
@@ -310,7 +329,7 @@ export const vectorizeImage = async (
     analysis?: AnalysisResult 
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
     const { width, height } = await getImageDimensions(base64Image, mimeType);
 
     const detailPrompt = config.vectorDetail === 'LOW' ? "Minimalist." : config.vectorDetail === 'HIGH' ? "High fidelity." : "Standard trace.";
@@ -327,7 +346,11 @@ export const vectorizeImage = async (
     }
 
     const diffVGPrompt = config.physics.enableDiffVG 
-        ? `*** ALGORITHMIC MODE: DiffVG *** ...` 
+        ? `*** ALGORITHMIC MODE: DiffVG ***
+           SIMULATE DIFFERENTIABLE RENDERING (DiffVG).
+           - Optimize Bezier control points to minimize geometric loss against the raster input.
+           - Ensure curvature continuity (G2 continuity) at node junctions.
+           - Output precise SVG paths.` 
         : "";
 
     const physicsPrompt = config.physics.enableMaterial
@@ -367,9 +390,9 @@ export const vectorizeImage = async (
             model,
             contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
             config: { 
-                temperature: 0.2, 
-                maxOutputTokens: 65536, 
-                thinkingConfig: { thinkingBudget: 16384 } // High Intelligence
+                temperature: GEMINI_CONFIG.TEMP_LOGIC, 
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // High Intelligence
             }
         }));
         svgCode = response.text || "";
@@ -382,7 +405,7 @@ export const vectorizeImage = async (
                 model,
                 contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
                 config: { 
-                    temperature: 0.2, 
+                    temperature: GEMINI_CONFIG.TEMP_CREATIVE, 
                     maxOutputTokens: 20000
                     // No Thinking
                 }
@@ -455,7 +478,7 @@ export const extractText = async (
     mimeType: string
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
     const { width, height } = await getImageDimensions(base64Image, mimeType);
 
     const prompt = `
@@ -477,8 +500,8 @@ export const extractText = async (
             config: {
                 tools: [{codeExecution: {}}], 
                 responseMimeType: "application/json",
-                maxOutputTokens: 65536,
-                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
@@ -534,7 +557,7 @@ export const extractText = async (
 
 export const analyzeImageIssues = async (base64Image: string, mimeType: string): Promise<AnalysisResult> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
     
     // Run Color extraction in parallel but handled safely
     const preciseColorsPromise = getDominantColors(base64Image, mimeType);
@@ -560,8 +583,8 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
                 contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
                 config: {
                     responseMimeType: "application/json",
-                    maxOutputTokens: 65536,  // Increased
-                    thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,  // Increased
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                     responseSchema: {
                         type: Type.OBJECT,
                         properties: {
@@ -606,7 +629,7 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
 
 export const generateNewImage = async (prompt: string, config: RestorationConfig): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+    const model = GEMINI_CONFIG.VISION_MODEL;
     
     // Default 1:1 if original is selected for pure generation
     let targetAspectRatio = config.aspectRatio === AspectRatio.ORIGINAL ? "1:1" : config.aspectRatio as string;
@@ -643,7 +666,7 @@ export const inpaintImage = async (
     config: RestorationConfig
 ): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-image-preview"; // PIXEL MODEL
+    const model = GEMINI_CONFIG.VISION_MODEL;
     
     // For inpainting, we usually want to keep original ratio or target specific
     let targetAspectRatio = "1:1"; // Default safe

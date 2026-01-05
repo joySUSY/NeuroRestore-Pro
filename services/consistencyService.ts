@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SemanticAtlas, ValidationReport, AgentResponse, AgentStatus } from "../types";
-import { cleanRawJson, executeSafe } from "./geminiService";
+import { cleanRawJson, executeSafe, GEMINI_CONFIG } from "./geminiService";
 
 const getClient = () => {
     const apiKey = process.env.API_KEY;
@@ -39,7 +39,7 @@ export const validateRestoration = async (
     atlas: SemanticAtlas
 ): Promise<AgentResponse<ValidationReport>> => {
     const ai = getClient();
-    const model = "gemini-3-pro-preview"; // LOGIC MODEL
+    const model = GEMINI_CONFIG.LOGIC_MODEL;
 
     // Focus only on critical regions to save context window and focus attention
     const criticalRegions = atlas.regions.filter(r => 
@@ -52,7 +52,14 @@ export const validateRestoration = async (
 
     const prompt = `
     ACT AS A VISUAL QUALITY ASSURANCE (QA) CRITIC.
-    TASK: Perceptual Consistency Check (Source vs Restored).
+    TASK: Forensic Image Verification (Source vs Restored).
+    
+    <THINKING_PROCESS>
+    1. Compare Source vs. Restored.
+    2. Verify Semantic Integrity: Did the text change meaning?
+    3. Verify Physical Integrity: Is the texture consistent?
+    4. Verify Hallucinations: Are there new artifacts?
+    </THINKING_PROCESS>
     
     SEMANTIC TRUTH (ATLAS):
     Paper Type: ${atlas.globalPhysics.paperWhitePoint}
@@ -103,8 +110,8 @@ export const validateRestoration = async (
             },
             config: {
                 responseMimeType: "application/json",
-                maxOutputTokens: 20000,
-                thinkingConfig: { thinkingBudget: 16384 }, // High Intelligence
+                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
                 responseSchema: schemaConfig
             }
         }), 1);
