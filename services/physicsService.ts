@@ -77,13 +77,6 @@ export const geometricUnwarp = async (base64Image: string, mimeType: string): Pr
             // Check output of code execution
             if (part.executableCode) continue; // This is the script itself
             
-            // Check for the RESULT of execution
-            if (part.codeExecutionResult) {
-                // The output might be text (stdout) or an image
-                // But often Gemini puts the *resulting image* into a separate part of the content with inlineData
-                // Let's check the *entire* response parts for any generated images
-            }
-
             // Direct check for generated images in the response parts
             if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
                  return { 
