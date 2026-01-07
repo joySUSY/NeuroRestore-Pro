@@ -1,83 +1,71 @@
 
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, InkType, PaperType } from "../types";
-import { GEMINI_CONFIG } from "./geminiService";
-
-const getClient = () => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("API Key missing");
-    return new GoogleGenAI({ apiKey });
-};
-
-// --- UTILITIES ---
-
-const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
-    try {
-        return await operation();
-    } catch (error: any) {
-        const code = error.status || error.code;
-        if ((code === 500 || code === 503 || code === 429) && retries > 0) {
-            console.warn(`[PhysicsService] Error ${code}. Retrying in ${delay}ms... (${retries} attempts left)`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return withRetry(operation, retries - 1, delay * 2);
-        }
-        throw error;
-    }
-};
+import { GEMINI_CONFIG, executeSafe, getClient, downscaleImage } from "./geminiService";
 
 /**
  * ALGORITHM 1: DETERMINISTIC GEOMETRIC DEWARPING (Neuro-Symbolic)
  * Strategy: "Don't Draw. Calculate."
- * 1. AI writes Python Code to find contours (cv2).
- * 2. AI executes Code to get Perspective Transform Matrix.
- * 3. AI warps the image mathematically.
+ * 
+ * FIX: Added strict area check to prevent cropping to small regions (like stamps).
+ * FIX: Added strict prohibition on matplotlib.
  */
 export const geometricUnwarp = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
-    // Use LOGIC model for coding, it is smarter at python than Vision model
     const model = GEMINI_CONFIG.LOGIC_MODEL; 
 
+    // Downscale for code generation context
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1024, 0.9);
+
     const prompt = `
-    ACT AS A COMPUTER VISION ENGINEER (OpenCV Expert).
+    ACT AS A COMPUTER VISION ENGINEER (OpenCV 6.0 Specialist).
     TASK: Write and Execute Python code to perform 4-Point Perspective Transform (Dewarping).
     
-    ALGORITHM:
-    1. Load the input image.
-    2. Convert to Grayscale -> GaussianBlur(5x5) -> Canny Edge Detection.
-    3. Find Contours (cv2.RETR_LIST). Sort by area. Take the largest one.
-    4. Approximate the contour to a polygon (approxPolyDP).
-    5. IF the polygon has 4 points:
-       - Order points: top-left, top-right, bottom-right, bottom-left.
-       - Calculate new width/height (max euclidean distance).
-       - Construct destination points array (0,0) to (w,h).
-       - Apply 'cv2.getPerspectiveTransform' and 'cv2.warpPerspective'.
-    6. ELSE (if no clear document found):
-       - Return the original image unmodified.
+    CRITICAL RESTRICTIONS:
+    - **NO PLOTS**: Do not use 'matplotlib'.
+    - **NO CROPPING**: Only warp if the detected document covers > 40% of the image area.
     
-    INPUT: An image file is available in the context.
-    OUTPUT: Display the processed image result.
+    ALGORITHM:
+    1. Load 'image_file'.
+    2. Convert to Grayscale -> GaussianBlur(5x5) -> Canny Edge Detection.
+    3. Find Contours (cv2.RETR_LIST). Sort by area (descending).
+    
+    4. **SAFETY CHECK**:
+       - Get largest contour 'c'.
+       - Calculate area = cv2.contourArea(c).
+       - Image Area = width * height.
+       - IF area < (0.4 * Image Area):
+            # Abort dewarp to prevent accidental cropping of small elements.
+            cv2.imwrite('result.png', img)
+            exit()
+    
+    5. Approximate contour to polygon. IF 4 points found:
+       - Order points.
+       - Warp Perspective.
+       - Save 'result.png'.
+    
+    6. ELSE:
+       - Save original 'result.png'.
+    
+    INPUT: An image file is available.
+    OUTPUT: Execute code and save result.
     `;
 
     try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                tools: [{ codeExecution: {} }], // ENABLE SANDBOX
-                responseMimeType: "application/json", 
-                // We don't use responseSchema here because code execution returns complex artifacts
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // Plan the code before writing
-            }
-        }));
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                config: {
+                    tools: [{ codeExecution: {} }],
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
+        });
         
-        // Scan for Image Artifacts in the Execution Result
-        // The structure usually is: candidates[0].content.parts[] -> one part contains executableCode, next contains codeExecutionResult
         const parts = response.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
-            // Check output of code execution
-            if (part.executableCode) continue; // This is the script itself
-            
-            // Direct check for generated images in the response parts
             if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
                  return { 
                      status: AgentStatus.SUCCESS, 
@@ -87,32 +75,32 @@ export const geometricUnwarp = async (base64Image: string, mimeType: string): Pr
             }
         }
 
-        // Fallback: If code ran but didn't return an image (e.g., printed "No contour found")
         console.warn("Dewarping: Code executed but returned no image. Assuming no changes needed.");
         return { status: AgentStatus.NO_OP, data: `data:${mimeType};base64,${base64Image}`, message: "Dewarping: No bounds detected" };
 
     } catch (e: any) {
         console.warn(`Dewarping Code Execution Failed [${e.message}], falling back to Neural Simulation.`, e);
-        // FALLBACK TO NEURAL SIMULATION (Old Method) if Sandbox fails
         return geometricUnwarpNeural(base64Image, mimeType);
     }
 };
 
-/**
- * FALLBACK: NEURAL DEWARPING (Visual Approximation)
- * Used only if Python Sandbox fails.
- */
 const geometricUnwarpNeural = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.VISION_MODEL; 
     const prompt = `Fix perspective. Flatten this document to a top-down view. Keep resolution high.`;
     
     try {
-        const response = await ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: { imageConfig: { imageSize: "2K", aspectRatio: "1:1" } }
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
+                config: { 
+                    imageConfig: { imageSize: "2K", aspectRatio: "1:1" },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
         });
+
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Dewarping (Neural Fallback)" };
         }
@@ -121,45 +109,49 @@ const geometricUnwarpNeural = async (base64Image: string, mimeType: string): Pro
 };
 
 /**
- * ALGORITHM 2: INTRINSIC DECOMPOSITION (Division Normalization)
- * Strategy: Estimate background via Morphological Closing and divide.
- * I = R * L  =>  R = I / L
+ * ALGORITHM 2: INTRINSIC DECOMPOSITION
+ * 
+ * FIX: Strictly forbid plotting libraries to prevent "Original/Illumination" side-by-sides.
+ * FIX: Enforce output format.
  */
 export const intrinsicDecomposition = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL; 
 
+    // Downscale to prevent payload error
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1024, 0.9);
+
     const prompt = `
     ACT AS A PHYSICS ENGINE.
     TASK: Perform Intrinsic Image Decomposition (Shadow Removal) using Python OpenCV.
     
-    THEORY:
-    We assume the image I = Reflectance (R) * Illumination (L).
-    We want to recover R.
+    CRITICAL PROHIBITION:
+    - **NO PLOTS**: Do not use 'matplotlib'. Do not create subplots.
+    - **NO DEBUG OUTPUT**: Only return the final corrected image.
     
     ALGORITHM:
-    1. Load image. Convert to Grayscale.
-    2. Estimate Illumination (L):
-       - Use 'cv2.dilate' with a large kernel (e.g., 50x50) to remove text features.
-       - Use 'cv2.medianBlur' to smooth the illumination map.
-    3. Recover Reflectance (R):
-       - R = I / L (Division Normalization).
-       - Note: Use float32 for division to avoid clipping, then scale back to 0-255.
-    4. Normalize Contrast (CLAHE or MinMax).
+    1. Load image (cv2).
+    2. Estimate Illumination (L) using Morphological Closing (dilate with large kernel ~50x50) + MedianBlur.
+    3. Recover Reflectance (R) = I / L. (Use float32 division).
+    4. Clip and Normalize R to 0-255.
+    5. Save 'result.png' (R).
     
     INPUT: Image provided.
-    OUTPUT: Display the flattened (albedo) image.
+    OUTPUT: Save 'result.png'.
     `;
 
     try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                tools: [{ codeExecution: {} }], // ENABLE SANDBOX
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }
-            }
-        }));
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                config: {
+                    tools: [{ codeExecution: {} }],
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
+        });
 
         const parts = response.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
@@ -181,20 +173,23 @@ export const intrinsicDecomposition = async (base64Image: string, mimeType: stri
     }
 };
 
-/**
- * FALLBACK: NEURAL DECOMPOSITION
- */
 const intrinsicDecompositionNeural = async (base64Image: string, mimeType: string): Promise<AgentResponse<string>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.VISION_MODEL; 
     const prompt = `Remove shadows. Output only the flat text/paper color (Albedo). High fidelity.`;
     
     try {
-        const response = await ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: { imageConfig: { imageSize: "2K", aspectRatio: "1:1" } }
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
+                config: { 
+                    imageConfig: { imageSize: "2K", aspectRatio: "1:1" },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
         });
+        
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Lighting (Neural Fallback)" };
         }
@@ -203,7 +198,6 @@ const intrinsicDecompositionNeural = async (base64Image: string, mimeType: strin
 };
 
 // ... existing helpers ...
-// Helper: Render SVG Data URL to Bitmap Data URL (PNG)
 const renderSvgToBitmap = async (svgDataUrl: string, width: number, height: number): Promise<string> => {
     return new Promise((resolve) => {
         if (typeof window === 'undefined') { resolve(''); return; }
@@ -228,7 +222,6 @@ export const calculateResidualHeatmap = async (originalBase64: string, generated
     
     return new Promise(async (resolve) => {
         try {
-            // 1. Load Original
             const imgOrig = new Image();
             imgOrig.src = `data:image/png;base64,${originalBase64}`;
             await new Promise((r, j) => { imgOrig.onload = r; imgOrig.onerror = j; });
@@ -236,7 +229,6 @@ export const calculateResidualHeatmap = async (originalBase64: string, generated
             const width = imgOrig.width;
             const height = imgOrig.height;
 
-            // 2. Render Generated SVG to Bitmap
             const genPngUrl = await renderSvgToBitmap(generatedSvgDataUrl, width, height);
             if (!genPngUrl) { resolve({ heatmap: "", loss: 0 }); return; }
 
@@ -244,23 +236,19 @@ export const calculateResidualHeatmap = async (originalBase64: string, generated
             imgGen.src = genPngUrl;
             await new Promise((r, j) => { imgGen.onload = r; imgGen.onerror = j; });
 
-            // 3. Compare Pixels
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
             if(!ctx) { resolve({ heatmap: "", loss: 0 }); return; }
 
-            // Get Data Orig
             ctx.drawImage(imgOrig, 0, 0, width, height);
             const dataOrig = ctx.getImageData(0, 0, width, height).data;
 
-            // Get Data Gen
             ctx.clearRect(0,0, width, height);
             ctx.drawImage(imgGen, 0, 0, width, height);
             const dataGen = ctx.getImageData(0, 0, width, height).data;
 
-            // Create Heatmap
             const heatmapData = ctx.createImageData(width, height);
             const dataHeat = heatmapData.data;
 
@@ -268,7 +256,6 @@ export const calculateResidualHeatmap = async (originalBase64: string, generated
             let pixelCount = 0;
 
             for (let i = 0; i < dataOrig.length; i += 4) {
-                // Euclidean Distance in RGB
                 const rDiff = Math.abs(dataOrig[i] - dataGen[i]);
                 const gDiff = Math.abs(dataOrig[i+1] - dataGen[i+1]);
                 const bDiff = Math.abs(dataOrig[i+2] - dataGen[i+2]);
@@ -277,15 +264,12 @@ export const calculateResidualHeatmap = async (originalBase64: string, generated
                 totalDiff += diff;
                 pixelCount++;
 
-                // Threshold for "Error" visualization (DiffVG Gradient Signal)
                 if (diff > 25) {
-                    // Draw RED for Error
                     dataHeat[i] = 255;   // R
                     dataHeat[i+1] = 0;   // G
                     dataHeat[i+2] = 0;   // B
-                    dataHeat[i+3] = Math.min(255, diff * 3); // Alpha based on magnitude
+                    dataHeat[i+3] = Math.min(255, diff * 3); 
                 } else {
-                    // Transparent for Match (Zero Loss)
                     dataHeat[i+3] = 0; 
                 }
             }
@@ -312,55 +296,57 @@ export const refineVectorWithFeedback = async (
     heatmapBase64: string
 ): Promise<string> => {
     const ai = getClient();
-    const model = GEMINI_CONFIG.LOGIC_MODEL; // High Reasoning Model
+    const model = GEMINI_CONFIG.LOGIC_MODEL; 
+    
+    // Optimization: Downscale heatmap context image
+    const optimizedBase64 = await downscaleImage(originalBase64, originalMime, 1024, 0.9);
 
     const prompt = `
     ACT AS A DIFFERENTIABLE VECTOR GRAPHICS (DiffVG) OPTIMIZER.
-    
-    INPUT:
-    1. **Original Raster Image** (Ground Truth).
-    2. **Current SVG Code** (Current State).
-    3. **Residual Heatmap** (Gradient Signal). RED pixels indicate high geometric loss (mismatch).
-    
     TASK: Perform one step of Simulated Gradient Descent to minimize the Geometric Loss.
     
-    INSTRUCTION:
-    - Look at the **Residual Heatmap**. The RED areas are where your current curves do not align with the ink.
-    - **Adjust the Bezier Control Points** in the SVG code for paths corresponding to the RED regions.
-    - **Backpropagate Error**: Move the curves towards the ink in the Original Image.
-    - Do NOT change paths that are already correct (Transparent regions in heatmap).
-    - Maintain strict specific colors if provided previously.
+    INPUTS:
+    1. **Ground Truth**: Original Image.
+    2. **Current State**: SVG Code.
+    3. **Gradient Signal**: Residual Heatmap (Red = High Loss).
     
-    OUTPUT: The Refined SVG Code ONLY.
+    OPTIMIZATION STEP:
+    - Target the RED regions in the heatmap.
+    - Adjust Bezier control points to better fit the ink boundaries.
+    - Maintain G2 Continuity on curves.
+    
+    OUTPUT: Refined SVG Code.
     `;
 
     try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { 
-                parts: [
-                    { inlineData: { mimeType: originalMime, data: originalBase64 } },
-                    { inlineData: { mimeType: "image/png", data: heatmapBase64 } },
-                    { text: `CURRENT SVG CODE:\n${currentSvgCode}\n\n${prompt}` }
-                ] 
-            },
-            config: { 
-                temperature: GEMINI_CONFIG.TEMP_LOGIC, // Low temp for precision
-                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // High Intelligence
-            }
-        }));
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { 
+                    parts: [
+                        { inlineData: { mimeType: originalMime, data: optimizedBase64 } },
+                        { inlineData: { mimeType: "image/png", data: heatmapBase64 } },
+                        { text: `CURRENT SVG CODE:\n${currentSvgCode}\n\n${prompt}` }
+                    ] 
+                },
+                config: { 
+                    temperature: GEMINI_CONFIG.TEMP_LOGIC, 
+                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, 
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
+        });
 
         let svgCode = response.text || "";
         svgCode = svgCode.replace(/```xml/g, '').replace(/```svg/g, '').replace(/```/g, '').trim();
         const svgStart = svgCode.indexOf('<svg');
-        if (svgStart === -1) return currentSvgCode; // Fail gracefully
+        if (svgStart === -1) return currentSvgCode; 
         svgCode = svgCode.substring(svgStart);
         
         return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgCode)))}`;
 
     } catch (error: any) {
-        console.warn(`Refinement step failed [${error.status || error.code || 'Unknown'}], proceeding with original.`, error);
         return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(currentSvgCode)))}`;
     }
 };
@@ -415,7 +401,6 @@ export const generateMaterialFilters = (
     inkType: InkType, 
     paperType: PaperType
 ): string => {
-    // ... (Filter generation logic remains the same, strictly aesthetic/deterministic)
     let inkFilter = "";
     if (inkType === 'INKJET' || inkType === 'MARKER') {
         inkFilter = `

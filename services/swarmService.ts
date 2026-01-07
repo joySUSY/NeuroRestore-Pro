@@ -1,30 +1,9 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { cleanRawJson, GEMINI_CONFIG } from "./geminiService";
+import { cleanRawJson, GEMINI_CONFIG, executeSafe, getClient, extractResponseText, downscaleImage } from "./geminiService";
 import { AgentResponse, AgentStatus, ScoutResult, AuditResult } from "../types";
-
-// --- CONFIGURATION ---
-const getClient = () => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("API Key missing");
-    return new GoogleGenAI({ apiKey });
-};
-
-// --- UTILITIES ---
-
-const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
-    try {
-        return await operation();
-    } catch (error: any) {
-        const code = error.status || error.code;
-        if ((code === 500 || code === 503 || code === 429) && retries > 0) {
-            console.warn(`[SwarmService] Error ${code}. Retrying in ${delay}ms... (${retries} attempts left)`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return withRetry(operation, retries - 1, delay * 2);
-        }
-        throw error;
-    }
-};
+import { geometricUnwarp, intrinsicDecomposition } from "./physicsService";
+import { renderPDSR } from "./restorationService";
 
 const getClosestAspectRatio = (width: number, height: number): string => {
     const ratio = width / height;
@@ -40,53 +19,83 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     ).val;
 };
 
-// --- MODULE A: THE SCOUT (Gemini 3 Pro Logic) ---
+// Helper to verify integrity (e.g., prevent debug plots)
+const verifyImageIntegrity = async (originalBase64: string, candidateBase64: string): Promise<boolean> => {
+    if (typeof window === 'undefined') return true;
+    try {
+        const getDims = (b64: string): Promise<{w:number, h:number}> => new Promise(resolve => {
+            const i = new Image();
+            i.onload = () => resolve({w: i.width, h: i.height});
+            i.onerror = () => resolve({w: 100, h: 100});
+            i.src = `data:image/png;base64,${b64}`;
+        });
+        
+        const [orig, cand] = await Promise.all([getDims(originalBase64), getDims(candidateBase64)]);
+        
+        const r1 = orig.w / orig.h;
+        const r2 = cand.w / cand.h;
+        
+        // If aspect ratio shifts dramatically (e.g., > 1.0 difference), it's likely a side-by-side plot
+        if (Math.abs(r1 - r2) > 1.0) return false;
+        
+        return true;
+    } catch { return true; }
+};
+
+// --- MODULE A: THE SCOUT ---
 export const scoutLayout = async (base64Image: string, mimeType: string): Promise<AgentResponse<ScoutResult>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL;
     
+    // Scout only needs structural data, 1024px is plenty.
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1024);
+
     const prompt = `
-    ROLE: The Scout (High-Fidelity Perception Engine).
-    TASK: Analyze this document topology with Mathematical Precision.
+    ROLE: The Scout (Project Vanguard - Jan 2026).
+    TASK: Analyze document topology using GESTALT PRINCIPLES and *LayoutLMv4* logic.
     
     THINKING PROCESS:
-    1. **Topology Mapping**: Identify the physical boundaries of Header, Content, and Footer. 
-       - Distinguish between "Ink Content" and "Paper Edge".
-    2. **Damage Detection**: Scan for tears, holes, coffee stains, burns, or creases.
-       - Return bounding boxes ONLY for physical damage, not for content.
+    1. **Topology Mapping (3D)**: Estimate Paper Plane (flat/curled).
+    2. **Gestalt Grouping**: Group semantic blocks.
+    3. **Damage Detection**: Scan for tears/holes.
     
-    OUTPUT: Strict JSON.
+    OUTPUT: Strict JSON matching schema.
     `;
 
-    try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                responseMimeType: "application/json",
-                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        documentType: { type: Type.STRING },
-                        regions: {
-                            type: Type.OBJECT,
-                            properties: {
-                                header: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                                content: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                                footer: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                                damage_detected: { type: Type.BOOLEAN },
-                                damage_bbox: { type: Type.ARRAY, items: { type: Type.NUMBER } }
-                            }
-                        },
-                        description: { type: Type.STRING }
-                    }
+    const schemaConfig = {
+        type: Type.OBJECT,
+        properties: {
+            documentType: { type: Type.STRING },
+            regions: {
+                type: Type.OBJECT,
+                properties: {
+                    header: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                    content: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                    footer: { type: Type.ARRAY, items: { type: Type.NUMBER } },
+                    damage_detected: { type: Type.BOOLEAN },
+                    damage_bbox: { type: Type.ARRAY, items: { type: Type.NUMBER } }
                 }
-            }
-        }));
+            },
+            description: { type: Type.STRING }
+        }
+    };
 
-        const json = cleanRawJson(response.text || "{}");
+    try {
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                config: {
+                    responseMimeType: "application/json",
+                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION,
+                    responseSchema: schemaConfig
+                }
+            });
+        }, 'CRITICAL');
+
+        const json = cleanRawJson(extractResponseText(response) || "{}");
         const data = JSON.parse(json) as ScoutResult;
         return { status: AgentStatus.SUCCESS, data, message: "Scout Analysis Complete" };
 
@@ -95,12 +104,11 @@ export const scoutLayout = async (base64Image: string, mimeType: string): Promis
     }
 };
 
-// --- MODULE B: THE AUDITOR (Gemini 3 Pro Logic + Tools) ---
+// --- MODULE B: THE AUDITOR ---
 export const auditAndExtract = async (base64Image: string, mimeType: string, scoutData: ScoutResult): Promise<AgentResponse<AuditResult>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL;
 
-    // IDLE STATE CHECK: If Scout says it's just "ART", Auditor might skip
     if (scoutData.documentType === 'ART' || scoutData.documentType === 'PHOTO') {
          return { 
              status: AgentStatus.NO_OP, 
@@ -109,55 +117,42 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
          };
     }
 
-    const prompt = `
-    ROLE: The Auditor (Forensic Logic Engine).
-    CONTEXT: Scout identified this as ${scoutData.documentType}.
-    
-    TASK:
-    1. **Data Extraction**: Extract all visible text from the document.
-    2. **Grounding & Truth Verification (Google Search)**: Check entities (Addresses, Company Names) against real-world data.
-    3. **Mathematical Verification (Code Execution)**: Check numbers. Sum line items. Verify totals.
-    4. **Watermark Detection**: List distinct words that act as background noise.
+    // Auditor needs to read text, so we keep resolution reasonably high but capped
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1536);
 
+    const prompt = `
+    ROLE: The Auditor (Project Vanguard - Forensic Logic Engine).
+    CONTEXT: Scout identified this as ${scoutData.documentType}.
+    TASK: Data Extraction & Ontological Reconciliation.
     OUTPUT: JSON Object.
     `;
 
     try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                tools: [
-                    { googleSearch: {} },
-                    { codeExecution: {} }
-                ], 
-                responseMimeType: "application/json",
-                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        verifiedData: { type: Type.STRING },
-                        verificationLog: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        mathCorrections: { 
-                            type: Type.ARRAY, 
-                            items: { 
-                                type: Type.OBJECT,
-                                properties: {
-                                    original: { type: Type.STRING },
-                                    corrected: { type: Type.STRING },
-                                    note: { type: Type.STRING }
-                                }
-                            } 
-                        },
-                        watermarks: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    }
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                config: {
+                    tools: [
+                        { googleSearch: {} },
+                        { codeExecution: {} }
+                    ], 
+                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
                 }
-            }
-        }));
+            });
+        }, 'CRITICAL');
 
-        const json = cleanRawJson(response.text || "{}");
-        const rawResult = JSON.parse(json);
+        const text = extractResponseText(response) || "{}";
+        const json = cleanRawJson(text);
+        let rawResult: any = {};
+        try {
+            rawResult = JSON.parse(json);
+        } catch (e) {
+            console.warn("Auditor JSON parse failed, returning raw text as log");
+            rawResult = { verificationLog: [text] };
+        }
 
         let cleanVerifiedData = {};
         try {
@@ -185,82 +180,6 @@ export const auditAndExtract = async (base64Image: string, mimeType: string, sco
     }
 };
 
-// --- MODULE C: THE RESTORER (Gemini 3 Pro Vision) ---
-export const renderHighDefRaster = async (
-    base64Image: string, 
-    mimeType: string, 
-    width: number, 
-    height: number, 
-    auditData: AuditResult
-): Promise<AgentResponse<string>> => {
-    const ai = getClient();
-    const model = GEMINI_CONFIG.VISION_MODEL;
-
-    // 1. Determine Corrections from Auditor
-    let correctionPrompt = "";
-    if (auditData.mathCorrections && auditData.mathCorrections.length > 0) {
-        correctionPrompt += "\n*** CRITICAL LOGIC CORRECTIONS ***\n";
-        auditData.mathCorrections.forEach(c => {
-            correctionPrompt += `- CHANGE VISUAL TEXT "${c.original}" TO "${c.corrected}" (Reason: ${c.note})\n`;
-        });
-    }
-
-    const watermarks = auditData.watermarks || [];
-    const negativeConstraint = watermarks.length > 0 
-        ? `
-    *** NEGATIVE CONSTRAINT (WATERMARKS) ***
-    Detected Background Text: [${watermarks.join(', ')}]
-    INSTRUCTION: Fade these words into the background texture.
-    `
-        : "";
-
-    const dataSummary = JSON.stringify(auditData.verifiedData).slice(0, 4000); // Increased Context Window allows larger summary
-
-    const targetAspectRatio = getClosestAspectRatio(width, height);
-
-    const prompt = `
-    ROLE: The Restorer (Neural High-Bitrate Engine).
-    TASK: Perform a 4K Generative Upscale & Restoration of this image.
-    
-    INPUT DATA TRUTH:
-    ${dataSummary}
-
-    ${correctionPrompt}
-
-    ${negativeConstraint}
-    
-    VISUAL QUALITY STANDARDS:
-    1. **Lossless Fidelity**: Output at maximum bitrate.
-    2. **Intelligent Repair**: Heal any tears, stains, or holes.
-    3. **Typographic Reconstruction**: Re-render all text to be vector-sharp.
-    4. **Lighting**: Normalize lighting.
-    
-    OUTPUT: A single high-quality PNG image.
-    `;
-
-    try {
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                imageConfig: { 
-                    imageSize: "4K",
-                    aspectRatio: targetAspectRatio as any
-                }
-                // Vision models do not support Thinking Config yet
-            }
-        }));
-
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData) return { status: AgentStatus.SUCCESS, data: `data:image/png;base64,${part.inlineData.data}`, message: "Restoration Complete" };
-        }
-        return { status: AgentStatus.ERROR, data: null, message: "No image generated" };
-
-    } catch (e: any) {
-        return { status: AgentStatus.ERROR, data: null, message: e.message || "Restoration failed" };
-    }
-};
-
 // --- ORCHESTRATION ---
 export const processDocumentWithSwarm = async (
     base64Image: string, 
@@ -271,30 +190,86 @@ export const processDocumentWithSwarm = async (
     checkCancelled?: () => boolean
 ): Promise<AgentResponse<string>> => {
     
-    // 1. SCOUT
-    onLog("🚀 Scout (Pro): Scanning Topology...");
+    // 1. SCOUT (Violet Perception)
+    onLog("🚀 Scout (Vanguard): Scanning Topology & Gestalt Grouping...");
     const scoutRes = await scoutLayout(base64Image, mimeType);
     if (checkCancelled && checkCancelled()) return { status: AgentStatus.NO_OP, data: null, message: "Cancelled" };
     
     if (scoutRes.status === AgentStatus.ERROR) {
         onLog("⚠️ Scout failed. Falling back to Blind Restoration.");
-        // Continue with minimal data to avoid full crash
     }
     const scoutData = scoutRes.data || { documentType: 'UNKNOWN', regions: { header: [], content: [], footer: [], damage_detected: false }, description: "" };
 
-    // 2. AUDITOR
-    onLog("🧠 Auditor (Vision Pro): Verifying Logic & Grounding...");
-    const auditRes = await auditAndExtract(base64Image, mimeType, scoutData);
+    // 2. THE PHYSICIST (Violet Code)
+    onLog("📐 The Physicist (Vanguard): Calculating Geometric Unwarp via OpenCV...");
+    let processedBase64 = base64Image;
+    
+    // 2a. Geometric Dewarping
+    const dewarpRes = await geometricUnwarp(processedBase64, mimeType);
+    if (dewarpRes.status === AgentStatus.SUCCESS && dewarpRes.data) {
+        const candidate = dewarpRes.data.split(',')[1];
+        if (await verifyImageIntegrity(processedBase64, candidate)) {
+             processedBase64 = candidate;
+             onLog("✅ Geometry: Perspective Corrected via Python.");
+        } else {
+             onLog("⚠️ Geometry: Result discarded (Plot detected).");
+        }
+    } else {
+        onLog("ℹ️ Geometry: No correction needed or Code Failed.");
+    }
+    
     if (checkCancelled && checkCancelled()) return { status: AgentStatus.NO_OP, data: null, message: "Cancelled" };
 
-    if (auditRes.status === AgentStatus.NO_OP) {
-        onLog("ℹ️ Auditor skipped (Not required for this type).");
+    // 2b. Intrinsic Decomposition (Lighting)
+    onLog("💡 The Physicist (Vanguard): Decomposing Intrinsic Lighting...");
+    const lightingRes = await intrinsicDecomposition(processedBase64, mimeType);
+    if (lightingRes.status === AgentStatus.SUCCESS && lightingRes.data) {
+        const candidate = lightingRes.data.split(',')[1];
+        if (await verifyImageIntegrity(processedBase64, candidate)) {
+            processedBase64 = candidate;
+            onLog("✅ Lighting: Shadow layer removed via Python.");
+        } else {
+            onLog("⚠️ Lighting: Result discarded (Plot detected).");
+        }
     }
+
+    if (checkCancelled && checkCancelled()) return { status: AgentStatus.NO_OP, data: null, message: "Cancelled" };
+
+    // 3. AUDITOR (Violet Verification)
+    onLog("🧠 Auditor (Vanguard): Running Ontological Reconciliation...");
+    const auditRes = await auditAndExtract(processedBase64, mimeType, scoutData);
+    if (checkCancelled && checkCancelled()) return { status: AgentStatus.NO_OP, data: null, message: "Cancelled" };
+
     const auditData = auditRes.data || { verifiedData: {}, verificationLog: [], mathCorrections: [], watermarks: [] };
 
-    // 3. RESTORER
-    onLog("🎨 Restorer (Pro Image): Generative 4K Reconstruction...");
-    const restorerRes = await renderHighDefRaster(base64Image, mimeType, width, height, auditData);
+    // 4. RESTORER (Ashley Texture Specialist) - Note: In Vanguard protocol, Restorer uses renderPDSR
+    onLog("🎨 The Calligrapher (Vanguard): Semantic Texture Refinement...");
+    // We import renderPDSR from restorationService and use it here with an empty/basic atlas if needed
+    // In a full flow, we should reuse the semantic atlas built in perceptionService if available, 
+    // but here we are in Swarm mode. For simplicity, we create a transient atlas based on Audit Data.
+    
+    const transientAtlas: any = {
+        globalPhysics: { paperWhitePoint: '#FFFFFF', noiseProfile: 'CLEAN', blurKernel: 'NONE', lightingCondition: 'FLAT' },
+        regions: [], // In a real scenario, map auditData.verifiedData to regions
+        degradationScore: 0
+    };
+
+    // However, to align with the "Calligrapher" upgrade, we use the powerful renderPDSR function
+    const restorerRes = await renderPDSR(processedBase64, mimeType, width, height, transientAtlas, {
+        // Construct a temporary config aligned with defaults or pass from app
+        imageType: 'DOCUMENT' as any,
+        customPrompt: '',
+        resolution: '4K' as any,
+        aspectRatio: 'ORIGINAL' as any,
+        colorStyle: 'TRUE_TONE' as any,
+        detailEnhancement: 'MAX',
+        brushSize: 40,
+        maskBlendMode: 'add',
+        vectorDetail: 'MEDIUM',
+        vectorColor: 'COLOR',
+        pdsr: { enableTextPriors: true, enableTextureTransfer: true, enableSemanticRepair: true },
+        physics: { enableDewarping: true, enableIntrinsic: true, enableDiffVG: true, enableMaterial: true }
+    });
     
     return restorerRes;
 };

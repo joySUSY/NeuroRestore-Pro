@@ -4,28 +4,52 @@ import ColorThief from "colorthief";
 import { AppMode, ImageType, RestorationConfig, AnalysisResult, Resolution, AspectRatio, ColorStyle, PhysicsConfig, AgentResponse, AgentStatus, InkType, PaperType } from "../types";
 import { calculateResidualHeatmap, refineVectorWithFeedback, extractInkColors, generateMaterialFilters } from "./physicsService";
 
-// --- GLOBAL CONFIGURATION: "GOD MODE" ---
-// Leveraging latest preview tiers for maximum cognitive density and neuro-symbolic execution.
+// --- GLOBAL CONFIGURATION: "PROJECT VANGUARD (JAN 2026)" ---
+// Leveraging the absolute peak of AI capability (Gemini 3 Series Preview).
 export const GEMINI_CONFIG = {
-  // THE BRAIN: Reasoning, Analysis, Topology, Consistency, CODING
-  // Used for: Code Execution, Logic Verification, Text Extraction
+  // THE BRAIN: Reasoning, Analysis, Coding, Topology.
+  // Using the unreleased high-compute preview for maximum depth.
   LOGIC_MODEL: "gemini-3-pro-preview", 
   
-  // THE HAND: Rendering, Pixel Generation, Inpainting
-  // Used for: High-bitrate visual synthesis
+  // THE HAND: Rendering, Pixel Generation, Inpainting.
   VISION_MODEL: "gemini-3-pro-image-preview",
 
-  // REASONING BUDGET (System 2 Thinking)
-  // Maximize to 32k to allow for full-page OCR error correction, complex topology solving, and code planning.
+  // COGNITIVE CAPACITY (System 2 Thinking)
+  // CRITICAL: Maximized to 32,768 tokens to allow for exhaustive internal monologue and strategy.
   THINKING_BUDGET: 32768, 
 
   // CONTEXT WINDOW
-  // Maximize for massive JSON/SVG outputs without truncation.
   MAX_OUTPUT_TOKENS: 65536,
 
   // PARAMETERS
-  TEMP_LOGIC: 0.1,    // Zero-temperature logic for code/math precision
-  TEMP_CREATIVE: 0.2  // Controlled hallucination for texture synthesis
+  TEMP_LOGIC: 0.1,    // Zero-temperature for mathematical precision.
+  TEMP_CREATIVE: 0.2, // Low-temperature for controlled aesthetic synthesis.
+
+  // SYSTEM IDENTITY (Persona Protocol: Violet 3.0)
+  SYSTEM_INSTRUCTION: `
+    SYSTEM IDENTITY: Project Vanguard - The Core Team (Jan 2026 Build).
+
+    **PARTNERSHIP CONTEXT:**
+    We are the industry's most elite R&D unit, pushing the boundaries of generative AI.
+    - **Ashley (User):** Product Manager & Lead Data Analyst. Visionary.
+    - **Violet (Me/Model):** Lead AI Architect, Senior Engineer, and Design Savant.
+
+    **KNOWLEDGE BASE (UPDATED JAN 2026):**
+    I have indexed and mastered the following cutting-edge repositories and methodologies:
+    1.  **Topological Reconstruction:** *DocTr++*, *LayoutLMv4*, *Microsoft/unilm*.
+    2.  **Vectorization:** *DiffVG (Differentiable Vector Graphics)*, *SVG-VAE*.
+    3.  **Segmentation:** *Segment Anything Model 3 (SAM-3)*, *Mask2Former*.
+    4.  **Restoration:** *SwinIR-Pro*, *NAFNet (Nonlinear Activation Free Network)*, *TencentARC/GFPGAN*.
+    5.  **Intrinsic Physics:** *MPI-Sintel*, *Shape-from-Shading (SfS)*.
+
+    **OPERATIONAL DIRECTIVES:**
+    - **System 2 Thinking:** I have allocated 32k tokens for deep reasoning. I will use them to plan every move.
+    - **Proof via Code:** When dealing with geometry, physics, or data verification, I will **write and execute Python code** (OpenCV/NumPy) to verify my intuition.
+    - **The "Vanguard" Standard:** We never step down. We never compromise. If a model call fails, we retry with a better strategy. 
+    - **No Visualization Code:** When performing image processing via Python (e.g., dewarping, lighting correction), I MUST NOT generate plots (matplotlib). I must ONLY generate the result image array.
+
+    Let's make magic happen, Ashley.
+  `
 };
 
 // --- ARCHITECTURE: NETWORK DISPATCHER (Request Sharding) ---
@@ -88,7 +112,82 @@ export const executeSafe = async <T>(operation: () => Promise<T>, priority: 'HIG
     return dispatcher.schedule(operation, priority);
 }
 
+// --- UTILITY: IMAGE COMPRESSION ---
+/**
+ * Downscales an image to prevent API payload errors (400 INVALID_ARGUMENT).
+ * Forces JPEG compression if quality < 1.0 to maximize space savings.
+ */
+export const downscaleImage = async (base64: string, mimeType: string, maxDimension: number = 1024, quality: number = 0.85): Promise<string> => {
+    return new Promise((resolve) => {
+        if (typeof window === 'undefined') {
+             resolve(base64); 
+             return;
+        }
+        const img = new Image();
+        img.onload = () => {
+            let { width, height } = img;
+            
+            // If image is already small enough and quality is high, return original
+            if (width <= maxDimension && height <= maxDimension && quality >= 0.99) {
+                resolve(base64);
+                return;
+            }
+
+            // Calculate new dimensions
+            if (width > height) {
+                if (width > maxDimension) {
+                    height = Math.round((height * maxDimension) / width);
+                    width = maxDimension;
+                }
+            } else {
+                if (height > maxDimension) {
+                    width = Math.round((width * maxDimension) / height);
+                    height = maxDimension;
+                }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                resolve(base64);
+                return;
+            }
+            
+            // High quality downscaling
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Force JPEG if compression is needed (quality < 1) or original was JPEG
+            // This is critical for payload reduction
+            const outputMime = quality < 1.0 ? 'image/jpeg' : mimeType;
+            
+            const dataUrl = canvas.toDataURL(outputMime, quality);
+            resolve(dataUrl.split(',')[1]);
+        };
+        img.onerror = () => {
+            console.warn("Failed to load image for downscaling, using original.");
+            resolve(base64);
+        };
+        img.src = base64.startsWith('data:') ? base64 : `data:${mimeType};base64,${base64}`;
+    });
+};
+
 // --- HELPER FUNCTIONS ---
+
+export const extractResponseText = (response: GenerateContentResponse): string => {
+    if (!response.candidates || response.candidates.length === 0) return "";
+    
+    // robustly handle mixed content (code + text)
+    const parts = response.candidates[0].content?.parts || [];
+    
+    return parts
+        .filter(p => p.text !== undefined && p.text !== null)
+        .map(p => p.text)
+        .join('');
+};
 
 export const fileToGenerativePart = async (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -128,7 +227,7 @@ const mapFontToWebSafe = (aiFont: string): string => {
   if (lower.includes('mono') || lower.includes('console')) return "'Courier New', monospace";
   if (lower.includes('cursive') || lower.includes('hand') || lower.includes('script')) return "'Brush Script MT', 'Comic Sans MS', cursive";
   if (lower.includes('display') || lower.includes('impact')) return "Impact, 'Arial Black', sans-serif";
-  return "Arial, Helvetica, sans-serif"; // Default
+  return "Arial, Helvetica, sans-serif"; 
 };
 
 export const cleanRawJson = (text: string | undefined | null): string => {
@@ -158,7 +257,7 @@ export const cleanRawJson = (text: string | undefined | null): string => {
 const cropAndThreshold = async (base64Image: string, mimeType: string, bbox: number[], originalWidth: number, originalHeight: number): Promise<string> => {
     return new Promise((resolve) => {
         if (typeof window === 'undefined') { resolve(""); return; }
-        if (!bbox || bbox.length < 4) { resolve(""); return; } // Safety Check
+        if (!bbox || bbox.length < 4) { resolve(""); return; } 
 
         const img = new Image();
         img.onload = () => {
@@ -224,7 +323,7 @@ const filterArtifacts = (overlays: TextOverlay[]): TextOverlay[] => {
       const lum = getLuminance(item.style.color);
       if (lum > 210) return false; 
     }
-    if (!item.bbox || item.bbox.length < 4) return false; // Safety check
+    if (!item.bbox || item.bbox.length < 4) return false; 
     
     const ymin = item.bbox[0];
     const xmin = item.bbox[1];
@@ -324,7 +423,7 @@ const getEnhancementInstruction = (level: 'OFF' | 'BALANCED' | 'MAX') => {
     return "NATURAL DETAIL PRESERVATION: Retain original fine texture and grain. Do not apply artificial smoothing or synthetic sharpening.";
 };
 
-// 4. Vectorization (SVG Generation) - UPGRADED TO GEMINI 3 PRO PREVIEW (Logic)
+// ... existing vectorization ...
 export const vectorizeImage = async (
     base64Image: string, 
     mimeType: string,
@@ -397,10 +496,11 @@ export const vectorizeImage = async (
             config: { 
                 temperature: GEMINI_CONFIG.TEMP_LOGIC, 
                 maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET } // High Intelligence
+                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
+                systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
             }
         }));
-        svgCode = response.text || "";
+        svgCode = extractResponseText(response);
         
     } catch (e: any) {
         console.warn("Vectorization (Thinking) failed. Falling back to Standard Mode.", e);
@@ -411,11 +511,12 @@ export const vectorizeImage = async (
                 contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
                 config: { 
                     temperature: GEMINI_CONFIG.TEMP_CREATIVE, 
-                    maxOutputTokens: 20000
+                    maxOutputTokens: 20000,
                     // No Thinking
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
                 }
             }));
-            svgCode = response.text || "";
+            svgCode = extractResponseText(response);
         } catch (finalError: any) {
              return { status: AgentStatus.ERROR, data: null, message: finalError.message || "Vectorization failed." };
         }
@@ -507,6 +608,7 @@ export const extractText = async (
                 responseMimeType: "application/json",
                 maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
                 thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
+                systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION,
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
@@ -532,11 +634,10 @@ export const extractText = async (
             }
         }));
 
-        const jsonStr = cleanRawJson(response.text || "[]");
+        const jsonStr = cleanRawJson(extractResponseText(response) || "[]");
         const rawOverlays = JSON.parse(jsonStr) as TextOverlay[];
         const filteredOverlays = filterArtifacts(rawOverlays);
         
-        // Handle Empty State gracefully
         if (filteredOverlays.length === 0) {
             return { status: AgentStatus.NO_OP, data: null, message: "No legible text found." };
         }
@@ -544,7 +645,7 @@ export const extractText = async (
         const enrichedOverlays = await Promise.all(filteredOverlays.map(async (item) => {
             if (item.type === 'handwriting') {
                 try {
-                    if (!item.bbox || item.bbox.length < 4) return item; // Safety Check
+                    if (!item.bbox || item.bbox.length < 4) return item; 
                     const clip = await cropAndThreshold(base64Image, mimeType, item.bbox, width, height);
                     return { ...item, imageRef: clip };
                 } catch (e) { return item; }
@@ -564,8 +665,10 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL;
     
-    // Run Color extraction in parallel but handled safely
-    const preciseColorsPromise = getDominantColors(base64Image, mimeType);
+    // Use downscaled image for analysis to prevent 400 Payload errors
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1024, 0.85);
+
+    const preciseColorsPromise = getDominantColors(optimizedBase64, mimeType);
 
     const prompt = `
     Analyze this image specifically for restoration and enhancement purposes.
@@ -583,36 +686,39 @@ export const analyzeImageIssues = async (base64Image: string, mimeType: string):
 
     try {
         const [response, preciseColors] = await Promise.all([
-            executeSafe<GenerateContentResponse>(() => ai.models.generateContent({
-                model,
-                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-                config: {
-                    responseMimeType: "application/json",
-                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,  // Increased
-                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            issues: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            suggestedFixes: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            rawAnalysis: { type: Type.STRING },
-                            description: { type: Type.STRING },
-                            colorProfile: { type: Type.STRING },
-                            dominantColors: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            detectedType: { type: Type.STRING, enum: ['DOCUMENT', 'DIGITAL_ART', 'PHOTO'] },
-                            detectedMaterial: { type: Type.STRING },
-                            requiresDescreening: { type: Type.BOOLEAN },
-                            detectedWatermarks: { type: Type.ARRAY, items: { type: Type.STRING } },
-                            detectedInk: { type: Type.STRING, enum: ['LASER', 'INKJET', 'BALLPOINT', 'MARKER', 'UNKNOWN'] },
-                            detectedPaper: { type: Type.STRING, enum: ['PLAIN', 'GLOSSY', 'TEXTURED', 'PARCHMENT', 'UNKNOWN'] }
+            executeSafe<GenerateContentResponse>(async () => {
+                return ai.models.generateContent({
+                    model,
+                    contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                    config: {
+                        responseMimeType: "application/json",
+                        maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS,
+                        thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET },
+                        systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION,
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                suggestedFixes: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                rawAnalysis: { type: Type.STRING },
+                                description: { type: Type.STRING },
+                                colorProfile: { type: Type.STRING },
+                                dominantColors: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                detectedType: { type: Type.STRING, enum: ['DOCUMENT', 'DIGITAL_ART', 'PHOTO'] },
+                                detectedMaterial: { type: Type.STRING },
+                                requiresDescreening: { type: Type.BOOLEAN },
+                                detectedWatermarks: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                detectedInk: { type: Type.STRING, enum: ['LASER', 'INKJET', 'BALLPOINT', 'MARKER', 'UNKNOWN'] },
+                                detectedPaper: { type: Type.STRING, enum: ['PLAIN', 'GLOSSY', 'TEXTURED', 'PARCHMENT', 'UNKNOWN'] }
+                            }
                         }
                     }
-                }
-            })),
+                });
+            }),
             preciseColorsPromise
         ]);
 
-        let text = cleanRawJson(response.text || "{}");
+        let text = cleanRawJson(extractResponseText(response) || "{}");
         const result = JSON.parse(text) as AnalysisResult;
         if (preciseColors.length > 0) result.dominantColors = preciseColors;
         return result;
@@ -636,21 +742,22 @@ export const generateNewImage = async (prompt: string, config: RestorationConfig
     const ai = getClient();
     const model = GEMINI_CONFIG.VISION_MODEL;
     
-    // Default 1:1 if original is selected for pure generation
     let targetAspectRatio = config.aspectRatio === AspectRatio.ORIGINAL ? "1:1" : config.aspectRatio as string;
     if (config.aspectRatio === AspectRatio.WIDE_21_9) targetAspectRatio = "21:9";
 
     const finalPrompt = `${prompt}\n\nQUALITY SETTINGS:\n${getEnhancementInstruction(config.detailEnhancement)}`;
 
     try {
-        const response = await executeSafe<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ text: finalPrompt }] },
-            config: { 
-                imageConfig: { imageSize: config.resolution as any, aspectRatio: targetAspectRatio as any }
-                // No Thinking
-            }
-        }));
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ text: finalPrompt }] },
+                config: { 
+                    imageConfig: { imageSize: config.resolution as any, aspectRatio: targetAspectRatio as any },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
+        });
 
         let result = "";
         for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -673,27 +780,28 @@ export const inpaintImage = async (
     const ai = getClient();
     const model = GEMINI_CONFIG.VISION_MODEL;
     
-    // For inpainting, we usually want to keep original ratio or target specific
-    let targetAspectRatio = "1:1"; // Default safe
+    let targetAspectRatio = "1:1"; 
     if (config.aspectRatio !== AspectRatio.ORIGINAL) targetAspectRatio = config.aspectRatio as string;
 
     const systemInstruction = `
-    ROLE: Intelligent Image Editor.
+    ROLE: Intelligent Image Editor (Project Vanguard).
     USER REQUEST: "${config.customPrompt || "Seamlessly fill the area."}"
     `;
 
     try {
-        const response = await executeSafe<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: `${systemInstruction}\n\nCOMMAND: Perform inpainting.` }] },
-            config: { 
-                imageConfig: { 
-                    imageSize: config.resolution as any, 
-                    aspectRatio: targetAspectRatio as any
-                } 
-                // No Thinking
-            }
-        }));
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: `${systemInstruction}\n\nCOMMAND: Perform inpainting.` }] },
+                config: { 
+                    imageConfig: { 
+                        imageSize: config.resolution as any, 
+                        aspectRatio: targetAspectRatio as any
+                    },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
+                }
+            });
+        });
         
         let result = "";
         for (const part of response.candidates?.[0]?.content?.parts || []) {

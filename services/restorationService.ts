@@ -103,7 +103,7 @@ export const renderPDSR = async (
         : "";
 
     const finalPrompt = `
-    ROLE: Perception-Driven Semantic Restoration Engine (PDSR).
+    ROLE: Perception-Driven Semantic Restoration Engine (PDSR) - Vanguard V3.
     TASK: Perform Deep Restoration on this image using the provided Semantic Atlas.
     
     INPUT CONTEXT (The Semantic Atlas):
@@ -135,16 +135,19 @@ export const renderPDSR = async (
     try {
         // executeSafe wrapper handles network concurrency
         // NOTE: gemini-3-pro-image-preview does NOT support thinkingConfig, so we do not pass it.
-        const response = await executeSafe<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: finalPrompt }] },
-            config: {
-                imageConfig: { 
-                    imageSize: "4K",
-                    aspectRatio: targetAspectRatio as any
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: finalPrompt }] },
+                config: {
+                    imageConfig: { 
+                        imageSize: "4K",
+                        aspectRatio: targetAspectRatio as any
+                    },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
                 }
-            }
-        }));
+            });
+        }, 'CRITICAL');
 
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) {
@@ -235,16 +238,19 @@ export const refineRegion = async (
     `;
 
     try {
-        const response = await executeSafe<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType: "image/png", data: regionBase64 } }, { text: prompt }] },
-            config: {
-                imageConfig: { 
-                    imageSize: "1K", // Smaller resolution for patches is sufficient and faster
-                    aspectRatio: "1:1"
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType: "image/png", data: regionBase64 } }, { text: prompt }] },
+                config: {
+                    imageConfig: { 
+                        imageSize: "1K", // Smaller resolution for patches is sufficient and faster
+                        aspectRatio: "1:1"
+                    },
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
                 }
-            }
-        }));
+            });
+        }, 'CRITICAL');
 
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData) {

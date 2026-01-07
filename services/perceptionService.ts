@@ -1,14 +1,7 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, GlobalPhysics, AtlasRegion } from "../types";
-import { cleanRawJson, GEMINI_CONFIG } from "./geminiService";
-
-// --- CONFIGURATION ---
-const getClient = () => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new Error("API Key missing");
-    return new GoogleGenAI({ apiKey });
-};
+import { cleanRawJson, GEMINI_CONFIG, executeSafe, getClient, extractResponseText, downscaleImage } from "./geminiService";
 
 // --- UTILITIES ---
 const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
@@ -38,16 +31,19 @@ const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 10
 export const buildSemanticAtlas = async (base64Image: string, mimeType: string): Promise<AgentResponse<SemanticAtlas>> => {
     const ai = getClient();
     const model = GEMINI_CONFIG.LOGIC_MODEL; 
+    
+    // Downscale for perception analysis to avoid token limits
+    const optimizedBase64 = await downscaleImage(base64Image, mimeType, 1024);
 
     const prompt = `
-    ACT AS A COMPUTER VISION "DEGRADATION ASSESSMENT NETWORK" (DAN).
+    ACT AS A COMPUTER VISION "DEGRADATION ASSESSMENT NETWORK" (DAN) - VANGUARD EDITION (2026).
     TASK: Construct a Semantic Atlas of this image for Physics-Based Restoration (PDSR).
     
     <THINKING_PROCESS>
     1. **Physics Analysis (The Substrate)**:
-       - GEOMETRIC ANALYSIS: Detect page curl/warp vectors.
-       - MATERIAL ANALYSIS: Calculate Albedo (Paper White Point) vs Shading.
-       - Sample the paper margins. Determine the RGB "White Point" (e.g., #F0F0E0).
+       - GEOMETRIC ANALYSIS: Detect page curl/warp vectors using *DocTr++* logic.
+       - MATERIAL ANALYSIS: Calculate Albedo (Paper White Point) vs Shading (Shape-from-Shading).
+       - Sample the paper margins. Determine the RGB "White Point".
        - Analyze grain. Is it coarse (ISO Noise) or smooth (Compression artifacts)?
        - Estimate the Blur Kernel (Motion vs Defocus).
     
@@ -92,58 +88,37 @@ export const buildSemanticAtlas = async (base64Image: string, mimeType: string):
     };
 
     try {
-        // ATTEMPT 1: High Intelligence (Thinking Enabled)
-        // Using God Mode Budget
-        const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-            model,
-            contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-            config: {
-                responseMimeType: "application/json",
-                maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
-                thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, // High Intelligence
-                responseSchema: schemaConfig
-            }
-        }), 1); 
+        const response = await executeSafe<GenerateContentResponse>(async () => {
+            return ai.models.generateContent({
+                model,
+                contents: { parts: [{ inlineData: { mimeType, data: optimizedBase64 } }, { text: prompt }] },
+                config: {
+                    responseMimeType: "application/json",
+                    maxOutputTokens: GEMINI_CONFIG.MAX_OUTPUT_TOKENS, 
+                    thinkingConfig: { thinkingBudget: GEMINI_CONFIG.THINKING_BUDGET }, 
+                    systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION,
+                    responseSchema: schemaConfig
+                }
+            });
+        });
 
-        const json = cleanRawJson(response.text || "{}");
+        const json = cleanRawJson(extractResponseText(response) || "{}");
         const atlas = JSON.parse(json) as SemanticAtlas;
         if (!atlas.globalPhysics) throw new Error("Invalid Atlas Structure");
 
         return { status: AgentStatus.SUCCESS, data: atlas, message: "Semantic Atlas Built." };
 
     } catch (e: any) {
-        console.warn("Perception (Deep Mode) failed. Falling back to Standard Mode.", e);
-
-        // ATTEMPT 2: Standard Mode (No Thinking, Higher Robustness)
-        try {
-            const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
-                model,
-                contents: { parts: [{ inlineData: { mimeType, data: base64Image } }, { text: prompt }] },
-                config: {
-                    responseMimeType: "application/json",
-                    maxOutputTokens: 20000,
-                    // Disabled Thinking Config for fallback robustness
-                    responseSchema: schemaConfig
-                }
-            }), 2);
-
-            const json = cleanRawJson(response.text || "{}");
-            const atlas = JSON.parse(json) as SemanticAtlas;
-            
-            if (!atlas.globalPhysics) {
-                atlas.globalPhysics = { paperWhitePoint: '#FFFFFF', noiseProfile: 'CLEAN', blurKernel: 'NONE', lightingCondition: 'FLAT' };
-            }
-            if (!atlas.regions) atlas.regions = [];
-
-            return { status: AgentStatus.SUCCESS, data: atlas, message: "Semantic Atlas Built (Standard Mode)." };
-
-        } catch (fallbackError: any) {
-            console.error("Perception Engine Completely Failed:", fallbackError);
-            return { 
-                status: AgentStatus.ERROR, 
-                data: null, 
-                message: fallbackError.message || "Failed to build Semantic Atlas." 
-            };
-        }
+        console.error("Perception Engine Failed:", e);
+        const fallbackAtlas: SemanticAtlas = {
+            globalPhysics: { paperWhitePoint: '#FFFFFF', noiseProfile: 'CLEAN', blurKernel: 'NONE', lightingCondition: 'FLAT' },
+            regions: [],
+            degradationScore: 0
+        };
+        return { 
+            status: AgentStatus.SUCCESS, 
+            data: fallbackAtlas, 
+            message: "Semantic Atlas Built (Fallback)." 
+        };
     }
 };
