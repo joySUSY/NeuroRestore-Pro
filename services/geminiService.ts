@@ -69,7 +69,7 @@ class GeminiDispatcher {
         return GeminiDispatcher.instance;
     }
 
-    public async schedule<T>(task: () => Promise<T>, priority: 'HIGH' | 'LOW' = 'HIGH'): Promise<T> {
+    public async schedule<T>(task: () => Promise<T>, priority: 'CRITICAL' | 'HIGH' | 'LOW' = 'HIGH'): Promise<T> {
         return new Promise<T>((resolve, reject) => {
             const wrappedTask = async () => {
                 this.activeRequests++;
@@ -89,7 +89,7 @@ class GeminiDispatcher {
             if (this.activeRequests < this.MAX_CONCURRENCY) {
                 wrappedTask();
             } else {
-                if (priority === 'HIGH') {
+                if (priority === 'HIGH' || priority === 'CRITICAL') {
                     this.queue.unshift(wrappedTask); 
                 } else {
                     this.queue.push(wrappedTask); 
@@ -108,14 +108,16 @@ class GeminiDispatcher {
 
 const dispatcher = GeminiDispatcher.getInstance();
 
-export const executeSafe = async <T>(operation: () => Promise<T>, priority: 'HIGH' | 'LOW' = 'HIGH'): Promise<T> => {
+export const executeSafe = async <T>(operation: () => Promise<T>, priority: 'CRITICAL' | 'HIGH' | 'LOW' = 'HIGH'): Promise<T> => {
     return dispatcher.schedule(operation, priority);
 }
 
-// --- UTILITY: IMAGE COMPRESSION ---
+// --- UTILITY: IMAGE COMPRESSION & NORMALIZATION ---
+
 /**
  * Downscales an image to prevent API payload errors (400 INVALID_ARGUMENT).
  * Forces JPEG compression if quality < 1.0 to maximize space savings.
+ * Ensures output MIME type is supported by Gemini API.
  */
 export const downscaleImage = async (base64: string, mimeType: string, maxDimension: number = 1024, quality: number = 0.85): Promise<string> => {
     return new Promise((resolve) => {
@@ -128,7 +130,10 @@ export const downscaleImage = async (base64: string, mimeType: string, maxDimens
             let { width, height } = img;
             
             // If image is already small enough and quality is high, return original
-            if (width <= maxDimension && height <= maxDimension && quality >= 0.99) {
+            // UNLESS the mime type is unsupported (e.g. AVIF), then we must re-encode.
+            const isSupported = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'].includes(mimeType);
+            
+            if (width <= maxDimension && height <= maxDimension && quality >= 0.99 && isSupported) {
                 resolve(base64);
                 return;
             }
@@ -162,7 +167,12 @@ export const downscaleImage = async (base64: string, mimeType: string, maxDimens
             
             // Force JPEG if compression is needed (quality < 1) or original was JPEG
             // This is critical for payload reduction
-            const outputMime = quality < 1.0 ? 'image/jpeg' : mimeType;
+            let outputMime = quality < 1.0 ? 'image/jpeg' : mimeType;
+            
+            // Safety Check: Ensure output mime is supported by API. Fallback to PNG if not.
+            if (!['image/png', 'image/jpeg', 'image/webp'].includes(outputMime)) {
+                outputMime = 'image/png';
+            }
             
             const dataUrl = canvas.toDataURL(outputMime, quality);
             resolve(dataUrl.split(',')[1]);
@@ -172,6 +182,49 @@ export const downscaleImage = async (base64: string, mimeType: string, maxDimens
             resolve(base64);
         };
         img.src = base64.startsWith('data:') ? base64 : `data:${mimeType};base64,${base64}`;
+    });
+};
+
+/**
+ * Validates and converts uploaded files to ensure API compatibility.
+ * Specifically converts AVIF/TIFF to PNG to avoid INVALID_ARGUMENT errors.
+ */
+export const processUploadedFile = async (file: File): Promise<{ base64: string, mimeType: string }> => {
+    // List of MIMEs known to be supported by Gemini API
+    const API_SUPPORTED_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif'];
+    
+    if (API_SUPPORTED_MIMES.includes(file.type)) {
+        const base64 = await fileToGenerativePart(file);
+        return { base64, mimeType: file.type };
+    }
+
+    // Convert unsupported types (AVIF, TIFF, BMP, etc.) to PNG
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                URL.revokeObjectURL(url);
+                reject(new Error("Canvas context failed"));
+                return;
+            }
+            ctx.drawImage(img, 0, 0);
+            const dataUrl = canvas.toDataURL('image/png');
+            URL.revokeObjectURL(url);
+            resolve({
+                base64: dataUrl.split(',')[1],
+                mimeType: 'image/png'
+            });
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error(`Failed to load/convert image format: ${file.type}`));
+        };
+        img.src = url;
     });
 };
 

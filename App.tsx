@@ -6,7 +6,7 @@ import CanvasEditor, { CanvasEditorRef } from './components/CanvasEditor';
 import AtlasOverlay from './components/AtlasOverlay';
 import ProcessingOverlay from './components/ProcessingOverlay';
 import LayerPanel from './components/LayerPanel';
-import { generateNewImage, inpaintImage, fileToGenerativePart, vectorizeImage } from './services/geminiService';
+import { generateNewImage, inpaintImage, processUploadedFile, vectorizeImage } from './services/geminiService';
 import { buildSemanticAtlas } from './services/perceptionService';
 import { renderPDSR, refineRegion } from './services/restorationService';
 import { validateRestoration } from './services/consistencyService';
@@ -285,7 +285,7 @@ const App: React.FC = () => {
         isProcessing: true, 
         stage: 'perception', 
         error: null, 
-        progressMessage: 'Uploading...',
+        progressMessage: 'Uploading & Analyzing...',
         progress: 0,
         networkStatus: 'UPLOADING',
         latencyMs: 5
@@ -300,12 +300,14 @@ const App: React.FC = () => {
     setShowAtlas(false);
     
     try {
-      const base64 = await fileToGenerativePart(file);
+      // Use the new safe processor which handles AVIF conversion
+      const { base64, mimeType: safeMime } = await processUploadedFile(file);
+      
       if (cancelRef.current) return;
 
-      const dataUrl = `data:${file.type};base64,${base64}`;
+      const dataUrl = `data:${safeMime};base64,${base64}`;
       setOriginalImage(dataUrl);
-      setMimeType(file.type);
+      setMimeType(safeMime); // Store the safe mime type (e.g. image/png)
       
       const img = new Image();
       img.onload = () => {
@@ -315,7 +317,9 @@ const App: React.FC = () => {
 
       // --- PHASE 1: PERCEPTION (Atlas Building) ---
       setProcessing(prev => ({ ...prev, stage: 'atlas_building', progressMessage: 'Building Semantic Atlas...' }));
-      const atlasRes = await buildSemanticAtlas(base64, file.type);
+      
+      // Pass the safe base64 and safe mime type to the API
+      const atlasRes = await buildSemanticAtlas(base64, safeMime);
       
       if (cancelRef.current) return;
 
@@ -372,7 +376,7 @@ const App: React.FC = () => {
           // The Swarm Service handles Scout, Auditor, and Restorer
           const swarmRes = await processDocumentWithSwarm(
               currentBase64,
-              mimeType,
+              mimeType, // This is now guaranteed to be safe
               imgDims.width,
               imgDims.height,
               (msg) => updateLog(msg),
