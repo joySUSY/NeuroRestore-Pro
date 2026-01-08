@@ -3,26 +3,6 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AgentResponse, AgentStatus, SemanticAtlas, GlobalPhysics, AtlasRegion } from "../types";
 import { cleanRawJson, GEMINI_CONFIG, executeSafe, getClient, extractResponseText, downscaleImage } from "./geminiService";
 
-// --- UTILITIES ---
-const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
-    try {
-        return await operation();
-    } catch (error: any) {
-        const code = error.status || error.code;
-        if ((code === 503 || code === 429) && retries > 0) {
-            console.warn(`[PerceptionService] Error ${code}. Retrying in ${delay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return withRetry(operation, retries - 1, delay * 2);
-        }
-        if (code === 500 && retries > 0) {
-             console.warn(`[PerceptionService] Error 500 (Internal). Retrying once...`);
-             await new Promise(resolve => setTimeout(resolve, delay));
-             return withRetry(operation, retries - 1, delay * 2);
-        }
-        throw error;
-    }
-};
-
 /**
  * MODULE A: COGNITIVE PERCEPTION ENGINE (The "Brain")
  * Task: Build the Semantic Atlas.

@@ -10,21 +10,6 @@ const getClient = () => {
     return new GoogleGenAI({ apiKey });
 };
 
-// --- UTILITIES ---
-const withRetry = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
-    try {
-        return await operation();
-    } catch (error: any) {
-        const code = error.status || error.code;
-        if ((code === 500 || code === 503 || code === 429) && retries > 0) {
-            console.warn(`[RestorationService] Error ${code}. Retrying in ${delay}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            return withRetry(operation, retries - 1, delay * 2);
-        }
-        throw error;
-    }
-};
-
 const getClosestAspectRatio = (width: number, height: number): string => {
     const ratio = width / height;
     const supported = [
@@ -67,20 +52,20 @@ export const renderPDSR = async (
     let textPriors = "";
     if (config.pdsr.enableTextPriors && textRegions.length > 0) {
         textPriors = `
-        *** TEXT-PRIOR GUIDED SUPER-RESOLUTION (TPGSR) ***
-        Inject the following semantic content into the super-resolution features.
-        Ensure these strings are rendered with vector-sharp edges:
-        ${textRegions.slice(0, 15).map(r => `- "${r.content}" (Strategy: ${r.restorationStrategy})`).join('\n')}
-        ... and all other detected text.
+        *** TPGSR (Text-Prior Guided Super-Resolution) ACTIVATED ***
+        INJECT the following Semantic Ground Truth into the generation features.
+        The output MUST contain these exact strings in high-definition typography:
+        ${textRegions.slice(0, 20).map(r => `- "${r.content}"`).join('\n')}
+        ... and ensure all other text is vector-sharp.
         `;
     }
 
     let colorAnchors = "";
     if (stampRegions.length > 0) {
         colorAnchors = `
-        *** ADAPTIVE COLOR ANCHORING ***
-        For Stamp/Signature regions, PRESERVE intrinsic pigment.
-        Do not binarize or grayscale these areas. Keep the authentic ink flow.
+        *** CHROMATICITY FREEZE ***
+        For Stamp/Signature regions, LOCK the pigment values.
+        Do not binarize. Maintain the analog variability of the ink.
         `;
     }
 
@@ -95,11 +80,10 @@ export const renderPDSR = async (
 
     const texturePrompt = config.pdsr.enableTextureTransfer 
         ? `*** NEURAL TEXTURE TRANSFER (NTT) ***
-           Reference Physics:
-           - Substrate Color: ${atlas.globalPhysics.paperWhitePoint}
-           - Noise Profile: ${atlas.globalPhysics.noiseProfile}
-           INSTRUCTION: Synthesize high-frequency details that match this specific paper grain. 
-           Reject synthetic "plastic" smoothing. Maintain the material fidelity ("Noble Noise").`
+           Target Physics:
+           - Substrate: ${atlas.globalPhysics.paperWhitePoint}
+           - Noise: ${atlas.globalPhysics.noiseProfile}
+           INSTRUCTION: Re-synthesize high-frequency grain. Reject "plastic" smoothing.`
         : "";
 
     const finalPrompt = `
@@ -110,20 +94,11 @@ export const renderPDSR = async (
     - Degradation Score: ${atlas.degradationScore}/100
     - Blur Kernel: ${atlas.globalPhysics.blurKernel}
     
-    INSTRUCTIONS:
-    1. **TEXT-PRIOR GUIDANCE (Critical)**:
-       - Use the "contentPrior" strings to hallucinate the high-frequency details of characters.
-       - "See" the letters clearly because you "Know" what they are (Inverse Problem Solving).
+    CORE OBJECTIVES:
+    1. **DEBLUR**: Remove '${atlas.globalPhysics.blurKernel}' blur.
+    2. **DENOISE**: Remove JPEG artifacts but KEEP paper grain.
+    3. **UPSAMPLE**: 4K High-Bitrate output.
     
-    2. **PHYSICS CONSISTENCY**:
-       - Do not simply whiten the background. 
-       - Re-synthesize paper grain matching '${atlas.globalPhysics.noiseProfile}' to avoid plastic smoothing.
-    
-    3. **OUTPUT STANDARDS**:
-       - 4K High-Bitrate Resolution.
-       - Deep Clarity (Remove '${atlas.globalPhysics.blurKernel}' blur).
-    
-    RESTORATION PROTOCOLS:
     ${textPriors}
     ${colorAnchors}
     ${repairDirectives}
@@ -133,8 +108,6 @@ export const renderPDSR = async (
     `;
 
     try {
-        // executeSafe wrapper handles network concurrency
-        // NOTE: gemini-3-pro-image-preview does NOT support thinkingConfig, so we do not pass it.
         const response = await executeSafe<GenerateContentResponse>(async () => {
             return ai.models.generateContent({
                 model,
@@ -162,7 +135,6 @@ export const renderPDSR = async (
 
     } catch (e: any) {
         console.error("Restoration Engine Failed:", e);
-        // Clean error message for UI
         const msg = e.message || "Unknown restoration error";
         return { status: AgentStatus.ERROR, data: null, message: msg };
     }
@@ -184,57 +156,48 @@ export const refineRegion = async (
 
     // --- ADAPTIVE RE-PROMPTING STRATEGY ---
     let strategy = "";
-    
     const lowerReason = failureReason.toLowerCase();
 
-    if (lowerReason.includes("ocr") || lowerReason.includes("text") || lowerReason.includes("read")) {
-        // STRATEGY: Hallucination Correction
+    if (lowerReason.includes("ocr") || lowerReason.includes("text") || lowerReason.includes("read") || lowerReason.includes("illegible")) {
         strategy = `
-        **FAILURE MODE:** OCR Mismatch / Illegible Text.
-        **CORRECTIVE ACTION:** STRICT_OCR_MATCH. 
-        - The pixel structure MUST form the string: "${semanticContext}".
-        - Sacrifice paper texture for absolute legibility. 
-        - Use High-Contrast Stroke generation.
+        **DIAGNOSIS:** Text is illegible or incorrect (OCR Mismatch).
+        **SURGICAL ACTION:** FORCE_TYPOGRAPHY_RECONSTRUCTION.
+        - You MUST render the string: "${semanticContext}" clearly.
+        - Increase contrast. Sharpen edges. Use a dark ink color.
         `;
     } else if (lowerReason.includes("texture") || lowerReason.includes("smooth") || lowerReason.includes("plastic")) {
-        // STRATEGY: Texture Injection
         strategy = `
-        **FAILURE MODE:** Oversmoothing / Plasticity.
-        **CORRECTIVE ACTION:** NOISE_INJECTION.
-        - The region looks too digital. 
-        - Synthesize high-frequency Gaussian noise to match paper grain.
-        - Do not blur the edges.
+        **DIAGNOSIS:** Texture Mismatch (Plasticity).
+        **SURGICAL ACTION:** GRAIN_INJECTION.
+        - Add monochromatic Gaussian noise to match the surrounding paper.
+        - Do not blur. Keep it crisp.
         `;
-    } else if (lowerReason.includes("artifact") || lowerReason.includes("stain")) {
-        // STRATEGY: Inpainting
+    } else if (lowerReason.includes("hallucination") || lowerReason.includes("artifact")) {
         strategy = `
-        **FAILURE MODE:** Artifact / Stain Detected.
-        **CORRECTIVE ACTION:** SEMANTIC_INPAINTING.
-        - Remove the obstruction.
-        - Fill with clean paper substrate color.
+        **DIAGNOSIS:** Hallucination / Artifacts.
+        **SURGICAL ACTION:** ARTIFACT_REMOVAL.
+        - Clean the background.
+        - Re-draw the content "${semanticContext}" simply and cleanly.
         `;
     } else {
-        // STRATEGY: General Enhancement
         strategy = `
-        **FAILURE MODE:** General Quality Loss.
-        **CORRECTIVE ACTION:** SHARPEN & DENOISE.
-        - Enhance edge contrast.
+        **DIAGNOSIS:** General Quality Failure.
+        **SURGICAL ACTION:** ENHANCE_FIDELITY.
+        - Sharpen text: "${semanticContext}".
+        - Clean background.
         `;
     }
 
     const prompt = `
-    ROLE: Surgical Image Correction Agent (Micro-Surgery).
-    TASK: Fix a specific artifact in this image patch using the strategy below.
+    ROLE: Surgical Image Correction Agent.
+    TASK: Repair this specific image patch based on the diagnosis.
     
-    CONTEXT:
-    This is a crop from a larger document.
-    Semantic Content (Ground Truth): "${semanticContext}"
-    Region Type: ${semanticType}
+    SEMANTIC TRUTH: "${semanticContext}"
+    TYPE: ${semanticType}
     
     ${strategy}
     
-    INSTRUCTION:
-    Re-generate this patch. Ensure seamless boundaries.
+    IMPORTANT: Return ONLY the corrected image patch. Maintain the same aspect ratio and lighting as the input.
     `;
 
     try {
@@ -243,10 +206,7 @@ export const refineRegion = async (
                 model,
                 contents: { parts: [{ inlineData: { mimeType: "image/png", data: regionBase64 } }, { text: prompt }] },
                 config: {
-                    imageConfig: { 
-                        imageSize: "1K", // Smaller resolution for patches is sufficient and faster
-                        aspectRatio: "1:1"
-                    },
+                    imageConfig: { imageSize: "1K", aspectRatio: "1:1" }, // Square patch
                     systemInstruction: GEMINI_CONFIG.SYSTEM_INSTRUCTION
                 }
             });
