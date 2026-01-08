@@ -165,23 +165,26 @@ const App: React.FC = () => {
       const code = actualError?.code || actualError?.status;
       const msg = (actualError?.message || actualError?.toString() || "").toLowerCase();
 
+      // Detailed User-Facing Error Messages
       if (msg.includes("unauthenticated") || code === 401) {
           setHasKey(false);
-          return "SESSION_EXPIRED";
+          return "Authentication Expired. Please reconnect your Google API Key to continue.";
       }
       if (msg.includes("429") || msg.includes("quota") || code === 429) {
-          return "RATE_LIMIT_EXCEEDED";
+          return "API Quota Exceeded. You've hit the rate limit for this API key. Please check your billing dashboard or try again in a few minutes.";
       }
       if (msg.includes("safety") || msg.includes("blocked")) {
-          return "SAFETY_BLOCK";
+          return "Safety Filter Triggered. The AI flagged the content as unsafe. Please try adjusting your prompt or using a different image.";
       }
       if (msg.includes("500") || msg.includes("internal server error") || code === 500) {
-          return "SERVER_ERROR";
+          return "Google AI Server Error. Something went wrong on Google's end. Please try again.";
       }
       if (msg.includes("503") || msg.includes("overloaded") || code === 503) {
-          return "SERVER_OVERLOAD";
+          return "Server Overloaded. The AI models are currently experiencing high traffic. Please try again shortly.";
       }
-      return error.message || "An unexpected error occurred.";
+      
+      // Generic Fallback with cleaner text
+      return actualError?.message || "An unexpected network error occurred. Please check your connection.";
   };
 
   const handleCancel = () => {
@@ -217,8 +220,8 @@ const App: React.FC = () => {
               const boxH = ((bbox[2] - bbox[0]) / 1000) * h;
               const boxW = ((bbox[3] - bbox[1]) / 1000) * w;
               
-              // Add Context Padding (25% or 20px)
-              const pad = Math.max(boxW * 0.25, boxH * 0.25, 20); 
+              // Add Context Padding (15%) for better blending later
+              const pad = Math.max(boxW * 0.15, boxH * 0.15); 
               
               const cropX = Math.max(0, x - pad);
               const cropY = Math.max(0, y - pad);
@@ -237,7 +240,7 @@ const App: React.FC = () => {
       });
   };
 
-  // Helper to Patch image (Reverse of crop)
+  // Helper to Patch image with SEAMLESS BLENDING (Feathering)
   const patchImage = async (baseImageBase64: string, patchBase64: string, bbox: number[]): Promise<string> => {
       return new Promise((resolve) => {
           const baseImg = new Image();
@@ -248,11 +251,11 @@ const App: React.FC = () => {
               const ctx = canvas.getContext('2d');
               if (!ctx) { resolve(baseImageBase64); return; }
               
+              // 1. Draw original base
               ctx.drawImage(baseImg, 0, 0);
 
               const patchImg = new Image();
               patchImg.onload = () => {
-                   // Calculate same coords as crop including padding
                    const h = baseImg.height;
                    const w = baseImg.width;
                    const y = (bbox[0] / 1000) * h;
@@ -260,14 +263,40 @@ const App: React.FC = () => {
                    const boxH = ((bbox[2] - bbox[0]) / 1000) * h;
                    const boxW = ((bbox[3] - bbox[1]) / 1000) * w;
                    
-                   const pad = Math.max(boxW * 0.25, boxH * 0.25, 20); 
+                   // Match the padding used in crop (15%)
+                   const pad = Math.max(boxW * 0.15, boxH * 0.15); 
 
                    const cropX = Math.max(0, x - pad);
                    const cropY = Math.max(0, y - pad);
                    const cropW = Math.min(w - cropX, boxW + (pad * 2));
                    const cropH = Math.min(h - cropY, boxH + (pad * 2));
                    
-                   ctx.drawImage(patchImg, cropX, cropY, cropW, cropH);
+                   // Create an offscreen canvas for the patch to apply masking
+                   const patchCanvas = document.createElement('canvas');
+                   patchCanvas.width = cropW;
+                   patchCanvas.height = cropH;
+                   const pCtx = patchCanvas.getContext('2d');
+                   if (!pCtx) { resolve(baseImageBase64); return; }
+
+                   // Draw the patch
+                   pCtx.drawImage(patchImg, 0, 0, cropW, cropH);
+
+                   // Create Radial Feathering Mask (Transparency at edges)
+                   pCtx.globalCompositeOperation = 'destination-in';
+                   const gradient = pCtx.createRadialGradient(
+                       cropW / 2, cropH / 2, Math.max(cropW, cropH) * 0.3, // Inner radius (opaque)
+                       cropW / 2, cropH / 2, Math.max(cropW, cropH) * 0.5  // Outer radius (transparent)
+                   );
+                   gradient.addColorStop(0, 'rgba(0,0,0,1)');
+                   gradient.addColorStop(0.8, 'rgba(0,0,0,1)'); // Keep most of it opaque
+                   gradient.addColorStop(1, 'rgba(0,0,0,0)');   // Fade out at very edge
+                   
+                   pCtx.fillStyle = gradient;
+                   pCtx.fillRect(0, 0, cropW, cropH);
+
+                   // Draw the feathered patch onto the main canvas
+                   ctx.drawImage(patchCanvas, cropX, cropY, cropW, cropH);
+                   
                    resolve(canvas.toDataURL());
               };
               patchImg.src = `data:image/png;base64,${patchBase64}`;
@@ -394,7 +423,7 @@ const App: React.FC = () => {
 
           // --- PHASE 4: THE JUDGE (Consistency Check) ---
           setProcessing(prev => ({ ...prev, stage: 'judging', progressMessage: 'Validating Semantic Consistency...' }));
-          updateLog("⚖️ The Judge: Comparing Semantic Truth...");
+          updateLog("⚖️ The Judge: Comparing Semantic Truth (Visual + SSIM)...");
           
           const validationRes = await validateRestoration(currentBase64, restoredBase64, semanticAtlas);
           
@@ -408,16 +437,16 @@ const App: React.FC = () => {
                    // --- PHASE 5: SURGICAL REFINEMENT ---
                    if (failures.length > 0) {
                         setProcessing(prev => ({ ...prev, stage: 'refining', progressMessage: 'Performing Surgical Refinement...' }));
-                        updateLog("💉 Surgical Loop: Correcting Hallucinations...");
+                        updateLog("💉 Surgical Loop: Triggering Targeted Re-Restoration...");
 
-                        // Iterate and Patch
+                        // Iterate and Patch - using resultUrl (restored image) as the canvas
                         let patchedImage = resultUrl;
                         for (const failure of failures) {
                             if (cancelRef.current) break;
                             const region = semanticAtlas.regions.find(r => r.id === failure.regionId);
                             if (!region) continue;
 
-                            updateLog(`🔧 Fixing Region ${region.id} (${failure.reason})...`);
+                            updateLog(`🔧 Fixing Region ${region.id}: ${failure.reason}`);
                             
                             // 1. Crop original (ground truth context)
                             const cropBase64 = await cropImageFromBase64(currentBase64, region.bbox);
@@ -503,7 +532,7 @@ const App: React.FC = () => {
 
   if (isCheckingKey) {
       return (
-        <div className="h-screen w-full flex items-center justify-center bg-morandi-base">
+        <div className="h-screen w-full flex items-center justify-center bg-morandi-base font-sans">
             <div className="flex flex-col items-center">
                  <div className="w-12 h-12 rounded-full border-2 border-morandi-blue border-t-transparent animate-spin mb-4"></div>
                  <div className="text-morandi-text font-medium tracking-wide text-sm">System Initializing</div>
@@ -514,13 +543,13 @@ const App: React.FC = () => {
 
   if (!hasKey) {
       return (
-        <div className="h-screen w-full flex items-center justify-center p-6 bg-morandi-base relative overflow-hidden">
+        <div className="h-screen w-full flex items-center justify-center p-6 bg-morandi-base relative overflow-hidden font-sans">
             <div className="absolute inset-0 bg-white/40 backdrop-blur-3xl z-0"></div>
             <div className="relative z-10 max-w-md w-full glass-panel p-10 text-center shadow-glass rounded-3xl animate-slide-up">
                 <div className="w-16 h-16 bg-morandi-text text-white rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl">
                     <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
                 </div>
-                <h1 className="text-2xl font-bold text-morandi-text mb-2">NeuroRestore PDSR</h1>
+                <h1 className="text-2xl font-serif italic font-bold text-morandi-text mb-2">NeuroRestore Pro</h1>
                 <p className="text-morandi-subtext mb-8 text-sm leading-relaxed">Perception-Driven Semantic Restoration Engine.</p>
                 <button onClick={handleSelectKey} className="w-full py-3.5 bg-morandi-dark text-white hover:bg-morandi-text rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 group">
                     <span>Connect Access Key</span>
@@ -550,7 +579,7 @@ const App: React.FC = () => {
         <div className="h-20 flex items-center justify-between px-8 z-20">
              <div className="flex items-center gap-4">
                 {(mode === AppMode.RESTORATION || mode === AppMode.VECTORIZATION || mode === AppMode.INPAINTING) && (
-                     <label className="cursor-pointer glass-button px-5 py-2.5 rounded-xl text-xs font-bold text-morandi-text flex items-center gap-2 transition-all hover:text-morandi-blue">
+                     <label className="cursor-pointer glass-button px-5 py-2.5 rounded-xl text-xs font-bold text-morandi-text flex items-center gap-2 transition-all hover:text-morandi-blue font-sans">
                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                      <span>{originalImage ? 'Replace Image' : 'Upload Source'}</span>
                      <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
@@ -559,7 +588,7 @@ const App: React.FC = () => {
                {semanticAtlas && (mode === AppMode.RESTORATION) && (
                    <button 
                        onClick={() => setShowAtlas(!showAtlas)}
-                       className={`px-3 py-1.5 rounded-full border text-[10px] font-bold flex items-center gap-2 shadow-sm transition-all ${showAtlas ? 'bg-morandi-blue text-white border-morandi-blue' : 'bg-white/60 text-morandi-blue border-white'}`}
+                       className={`px-3 py-1.5 rounded-full border text-[10px] font-bold flex items-center gap-2 shadow-sm transition-all font-sans ${showAtlas ? 'bg-morandi-blue text-white border-morandi-blue' : 'bg-white/60 text-morandi-blue border-white'}`}
                    >
                        <span className={`w-1.5 h-1.5 rounded-full bg-current ${showAtlas ? 'animate-pulse' : ''}`}></span>
                        {showAtlas ? 'HIDE ATLAS' : 'SHOW ATLAS'} ({semanticAtlas.regions.length})
@@ -571,7 +600,7 @@ const App: React.FC = () => {
                  {displayImage && mode !== AppMode.INPAINTING && (
                     <button 
                         onClick={() => handleSmartDownload(mode === AppMode.VECTORIZATION ? 'svg' : 'png')}
-                        className="glass-button px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all hover:bg-white hover:text-morandi-blue"
+                        className="glass-button px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all hover:bg-white hover:text-morandi-blue font-sans"
                     >
                         <span>Download {mode === AppMode.VECTORIZATION ? 'SVG' : 'Output'}</span>
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
@@ -603,9 +632,9 @@ const App: React.FC = () => {
                     <div className="w-24 h-24 bg-white/50 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner-light">
                         <svg className="w-10 h-10 text-morandi-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                     </div>
-                    <h3 className="text-2xl font-bold text-morandi-text mb-3">Drag & Drop Source</h3>
-                    <p className="text-morandi-subtext text-sm mb-8 leading-relaxed">Perception-Driven Semantic Restoration.<br/>We analyze text priors and material physics.</p>
-                    <label className="cursor-pointer bg-morandi-text hover:bg-morandi-text/80 text-white px-8 py-4 rounded-xl shadow-lg transition-transform hover:scale-105 inline-flex items-center gap-2 font-semibold">
+                    <h3 className="text-2xl font-serif italic font-bold text-morandi-text mb-3">Drag & Drop Source</h3>
+                    <p className="text-morandi-subtext text-sm mb-8 leading-relaxed font-sans">Perception-Driven Semantic Restoration.<br/>We analyze text priors and material physics.</p>
+                    <label className="cursor-pointer bg-morandi-text hover:bg-morandi-text/80 text-white px-8 py-4 rounded-xl shadow-lg transition-transform hover:scale-105 inline-flex items-center gap-2 font-semibold font-sans">
                         <span>Upload Source File</span>
                         <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                     </label>
@@ -617,8 +646,8 @@ const App: React.FC = () => {
                      <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
                         <svg className="w-8 h-8 text-morandi-mauve" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                      </div>
-                     <h3 className="text-xl font-bold text-morandi-text mb-2">Creative Mode</h3>
-                     <p className="text-morandi-subtext text-sm">Describe your vision in the sidebar to generate high-fidelity concepts.</p>
+                     <h3 className="text-xl font-serif italic font-bold text-morandi-text mb-2">Creative Mode</h3>
+                     <p className="text-morandi-subtext text-sm font-sans">Describe your vision in the sidebar to generate high-fidelity concepts.</p>
                  </div>
             )}
 
@@ -629,10 +658,10 @@ const App: React.FC = () => {
                              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                         </div>
                         
-                        <h3 className="text-gray-800 font-bold mb-2">Process Failed</h3>
-                        <p className="text-gray-600 text-sm mb-6 leading-relaxed">{processing.error}</p>
+                        <h3 className="text-gray-800 font-bold mb-2 font-serif italic">Process Failed</h3>
+                        <p className="text-gray-600 text-sm mb-6 leading-relaxed font-sans">{processing.error}</p>
                         
-                        <div className="flex gap-3 justify-center">
+                        <div className="flex gap-3 justify-center font-sans">
                             <button onClick={() => setProcessing(p => ({...p, error: null}))} className="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-semibold transition-colors">Dismiss</button>
                             <button onClick={handleRetry} className="px-6 py-2.5 bg-morandi-text hover:bg-morandi-text/90 text-white rounded-lg text-sm font-semibold transition-colors shadow-lg flex items-center gap-2">Retry</button>
                         </div>

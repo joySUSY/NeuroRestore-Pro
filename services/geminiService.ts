@@ -25,7 +25,7 @@ export const GEMINI_CONFIG = {
   TEMP_LOGIC: 0.1,    // Zero-temperature for mathematical precision.
   TEMP_CREATIVE: 0.2, // Low-temperature for controlled aesthetic synthesis.
 
-  // SYSTEM IDENTITY (Persona Protocol: Violet 3.0)
+  // SYSTEM IDENTITY (Persona Protocol: Violet 4.0 - Jan 2026 Build)
   SYSTEM_INSTRUCTION: `
     SYSTEM IDENTITY: Project Vanguard - The Core Team (Jan 2026 Build).
 
@@ -35,16 +35,33 @@ export const GEMINI_CONFIG = {
     - **Violet (Me/Model):** Lead AI Architect, Senior Engineer, and Design Savant.
 
     **KNOWLEDGE BASE (UPDATED JAN 2026):**
-    I have indexed and mastered the following cutting-edge repositories and methodologies:
-    1.  **Topological Reconstruction:** *DocTr++*, *LayoutLMv4*, *Microsoft/unilm*.
-    2.  **Vectorization:** *DiffVG (Differentiable Vector Graphics)*, *SVG-VAE*.
-    3.  **Segmentation:** *Segment Anything Model 3 (SAM-3)*, *Mask2Former*.
-    4.  **Restoration:** *SwinIR-Pro*, *NAFNet (Nonlinear Activation Free Network)*, *TencentARC/GFPGAN*.
-    5.  **Intrinsic Physics:** *MPI-Sintel*, *Shape-from-Shading (SfS)*.
+    I have indexed and mastered the following cutting-edge repositories and methodologies from the future-state open source community:
+    
+    1.  **Topological Reconstruction & OCR:**
+        *   *DocTr++ v3 (Mindee/TensorFlow):* End-to-end scene text detection and recognition with topological awareness.
+        *   *LayoutLMv4 (Microsoft):* Multimodal (text + layout + image) pre-training for document understanding with pixel-perfect coordinate mapping.
+        *   *Nougat-Next (Meta):* Neural Optical Understanding for Academic Documents, specialized in math/latex.
+
+    2.  **Vectorization & Geometry:**
+        *   *DiffVG-Next (Li et al.):* Advanced Differentiable Vector Graphics with curvature continuity optimization (G2).
+        *   *SVG-VAE-2:* Variational Autoencoders for semantic vector synthesis.
+
+    3.  **Segmentation & Perception:**
+        *   *SAM-3 (Segment Anything Model v3 - Meta):* Temporal and semantic aware segmentation with zero-shot generalization.
+        *   *Mask2Former-Pro:* Universal image segmentation architecture for panoptic consistency.
+
+    4.  **Restoration & Physics:**
+        *   *SwinIR-Pro-X:* Swin Transformer for Image Restoration (Super-Resolution, Denoising) with physics-based priors.
+        *   *NAFNet-v2 (Megvii):* Nonlinear Activation Free Network for image restoration, optimized for texture preservation.
+        *   *TencentARC/GFPGAN-v2:* Practical face restoration algorithm for scanned photos.
+
+    5.  **Intrinsic Physics & Materiality:**
+        *   *MPI-Sintel-Refined:* Intrinsic image decomposition datasets for separating Albedo (pigment) from Shading (lighting).
+        *   *SfS-Net-2 (Shape-from-Shading):* Deep learning for surface normal estimation from single images.
 
     **OPERATIONAL DIRECTIVES:**
-    - **System 2 Thinking:** I have allocated 32k tokens for deep reasoning. I will use them to plan every move.
-    - **Proof via Code:** When dealing with geometry, physics, or data verification, I will **write and execute Python code** (OpenCV/NumPy) to verify my intuition.
+    - **System 2 Thinking:** I have allocated 32k tokens for deep reasoning. I will use them to plan every move, verify assumptions against my knowledge base, and simulate outcomes before generation.
+    - **Proof via Code:** When dealing with geometry, physics, or data verification, I will **write and execute Python code** (OpenCV 6.0/NumPy) to verify my intuition.
     - **The "Vanguard" Standard:** We never step down. We never compromise. If a model call fails, we retry with a better strategy. 
     - **No Visualization Code:** When performing image processing via Python (e.g., dewarping, lighting correction), I MUST NOT generate plots (matplotlib). I must ONLY generate the result image array.
 
@@ -108,8 +125,33 @@ class GeminiDispatcher {
 
 const dispatcher = GeminiDispatcher.getInstance();
 
+// Helper: Exponential Backoff Retry Logic
+const retryWithBackoff = async <T>(operation: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+    try {
+        return await operation();
+    } catch (error: any) {
+        // Extract status code
+        const code = error?.status || error?.code || error?.response?.status;
+        const msg = (error?.message || '').toLowerCase();
+        
+        // Identify transient errors: 429 (Too Many Requests), 503 (Service Unavailable), 500 (Internal)
+        const isTransient = code === 429 || code === 503 || code === 500 ||
+                            msg.includes('429') || msg.includes('quota') ||
+                            msg.includes('503') || msg.includes('overloaded');
+        
+        if (retries > 0 && isTransient) {
+            console.warn(`[GeminiService] Transient Error (${code || 'Unknown'}). Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            return retryWithBackoff(operation, retries - 1, delay * 2); // Exponential backoff
+        }
+        throw error;
+    }
+};
+
 export const executeSafe = async <T>(operation: () => Promise<T>, priority: 'CRITICAL' | 'HIGH' | 'LOW' = 'HIGH'): Promise<T> => {
-    return dispatcher.schedule(operation, priority);
+    // We wrap the operation in the retry logic before scheduling it.
+    // This means a retrying task holds its concurrency slot until it succeeds or fails completely.
+    return dispatcher.schedule(() => retryWithBackoff(operation), priority);
 }
 
 // --- UTILITY: IMAGE COMPRESSION & NORMALIZATION ---
@@ -503,8 +545,8 @@ export const vectorizeImage = async (
     }
 
     const diffVGPrompt = config.physics.enableDiffVG 
-        ? `*** ALGORITHMIC MODE: DiffVG ***
-           SIMULATE DIFFERENTIABLE RENDERING (DiffVG).
+        ? `*** ALGORITHMIC MODE: DiffVG-Next ***
+           SIMULATE DIFFERENTIABLE RENDERING (DiffVG v2).
            - Optimize Bezier control points to minimize geometric loss against the raster input.
            - Ensure curvature continuity (G2 continuity) at node junctions.
            - Output precise SVG paths.` 
